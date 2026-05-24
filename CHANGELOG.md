@@ -12,17 +12,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Manifest V3 service worker that detects navigation to known AI provider
   domains.
 - Receipt emission via POST to api.asqav.com with X-API-Key authentication.
-- Retry queue (chrome.storage.session) with archival of dropped entries (this
-  PR).
-- chrome.storage.managed policy hook for MDM auto-enable (this PR).
-- 36 Jest unit tests; 2 Playwright e2e tests (this PR).
+- Retry queue (chrome.storage.local) with archival of overflowed entries
+  (#2).
+- chrome.storage.managed policy hook for MDM auto-enable (#2).
+- 36 Jest unit tests; 2 Playwright e2e tests (#2).
 - MDM deployment guides for Intune and JAMF (updated for
-  optional_host_permissions, this PR).
+  optional_host_permissions, #2).
 
 ### Security
 
 - optional_host_permissions migration: 28 AI hosts moved from install-time to
   runtime grant.
-- chrome.storage.session for ephemeral apiKey.
+- apiKey now stored in chrome.storage.session (in-memory, cleared on browser
+  restart); agentId and the retry queue remain in chrome.storage.local.
 
 comment hygiene clean
