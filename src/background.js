@@ -7,17 +7,36 @@
  * includes the prompt content.
  *
  * Endpoint: POST https://api.asqav.com/api/v1/agents/<agent_id>/sign
- * Auth:     X-API-Key header sourced from chrome.storage.local
+ * Auth:     X-API-Key header sourced from chrome.storage.session (apiKey) and
+ *           chrome.storage.local (agentId).
  *
- * Cloud dependency: Track A1 (W1) must extend the receipt_type Literal in
- * SignRequest to include "protectmcp:observation" before posts from this
- * extension are accepted. Until then, the cloud returns invalid_receipt_type.
+ * Cycle 25 hardening:
+ *   - API key now read from chrome.storage.session (in-memory, not readable by
+ *     other extensions, cleared on browser restart).
+ *   - Failed POSTs are queued in chrome.storage.local.pendingReceipts (FIFO,
+ *     cap 100) and retried by a chrome.alarms tick every 5 minutes.
+ *   - chrome.notifications fires at most once per hour per error class so
+ *     operators learn about persistent failures without notification spam.
+ *
+ * Cloud dependency: the cloud's SignRequest receipt_type Literal must include
+ * "protectmcp:observation" before posts from this extension are accepted.
  */
 
 const ASQAV_ENDPOINT_BASE = "https://api.asqav.com/api/v1/agents";
 const RECEIPT_TYPE = "protectmcp:observation";
 const ACTION_TYPE = "llm:egress";
 const CAPTURE_TOPOLOGY = "browser_extension";
+
+// Retry queue knobs.
+const PENDING_QUEUE_KEY = "pendingReceipts";
+const PENDING_QUEUE_MAX = 100;
+const RETRY_ALARM_NAME = "asqav-retry-pending";
+const RETRY_ALARM_MINUTES = 5;
+
+// Notification throttle. Stored last-fired-at-ms per error class in
+// chrome.storage.local under the "errorNotifiedAt" object.
+const NOTIFY_THROTTLE_MS = 60 * 60 * 1000;
+const NOTIFY_KEY = "errorNotifiedAt";
 
 // Inlined seed list (the JSON file is bundled but the service worker must not
 // rely on fetch() against extension-local URLs in MV3 cold-start paths).
@@ -159,8 +178,10 @@ async function buildReceiptBody(ctx) {
 }
 
 /**
- * Fetch config from chrome.storage.local. Returns null when either field is
- * missing so callers can short-circuit before opening a network connection.
+ * Fetch config. apiKey is sourced from chrome.storage.session (in-memory) and
+ * agentId from chrome.storage.local (persisted). Returns null when either
+ * field is missing so callers can short-circuit before opening a network
+ * connection.
  *
  * @returns {Promise<{apiKey: string, agentId: string} | null>}
  */
@@ -168,10 +189,18 @@ async function loadConfig() {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) {
     return null;
   }
-  const { apiKey, agentId } = await chrome.storage.local.get([
-    "apiKey",
-    "agentId",
-  ]);
+  const { agentId } = await chrome.storage.local.get(["agentId"]);
+  let apiKey;
+  if (chrome.storage.session && chrome.storage.session.get) {
+    const sessionPart = await chrome.storage.session.get(["apiKey"]);
+    apiKey = sessionPart.apiKey;
+  }
+  // Fallback for environments without storage.session: read from local. The
+  // options page documents the downgrade.
+  if (!apiKey) {
+    const localPart = await chrome.storage.local.get(["apiKey"]);
+    apiKey = localPart.apiKey;
+  }
   if (!apiKey || !agentId) return null;
   return { apiKey, agentId };
 }
@@ -206,11 +235,127 @@ async function getProfileEmail() {
 }
 
 /**
- * Emit a receipt for one observed AI-tool navigation.
+ * Append a failed receipt to the pending queue. FIFO drop once the queue
+ * exceeds PENDING_QUEUE_MAX so we never grow without bound.
+ *
+ * @param {{ endpoint: string, apiKey: string, body: object, enqueuedAt: string }} entry
+ */
+async function enqueuePending(entry) {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
+  const { [PENDING_QUEUE_KEY]: existing = [] } = await chrome.storage.local.get(
+    [PENDING_QUEUE_KEY],
+  );
+  const next = Array.isArray(existing) ? existing.slice() : [];
+  next.push(entry);
+  while (next.length > PENDING_QUEUE_MAX) {
+    next.shift();
+  }
+  await chrome.storage.local.set({ [PENDING_QUEUE_KEY]: next });
+}
+
+/**
+ * Atomically replace the pending queue.
+ *
+ * @param {Array} entries
+ */
+async function setPending(entries) {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
+  await chrome.storage.local.set({ [PENDING_QUEUE_KEY]: entries });
+}
+
+/**
+ * Read the pending queue (always returns an array).
+ *
+ * @returns {Promise<Array>}
+ */
+async function getPending() {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return [];
+  const { [PENDING_QUEUE_KEY]: existing = [] } = await chrome.storage.local.get(
+    [PENDING_QUEUE_KEY],
+  );
+  return Array.isArray(existing) ? existing : [];
+}
+
+/**
+ * Fire a chrome.notifications notification, throttled to at most once per
+ * NOTIFY_THROTTLE_MS per error class so persistent failures do not spam the
+ * operator. Errors here are swallowed; user feedback is best-effort.
+ *
+ * @param {string} errorClass
+ * @param {string} message
+ * @param {{ nowMs?: () => number }} [deps]
+ */
+async function maybeNotify(errorClass, message, deps = {}) {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
+  const nowMs = deps.nowMs || (() => Date.now());
+  const { [NOTIFY_KEY]: book = {} } = await chrome.storage.local.get([
+    NOTIFY_KEY,
+  ]);
+  const lastAt = (book && book[errorClass]) || 0;
+  const now = nowMs();
+  // lastAt === 0 means we have never fired for this class; allow through.
+  if (lastAt !== 0 && now - lastAt < NOTIFY_THROTTLE_MS) return;
+  const nextBook = Object.assign({}, book, { [errorClass]: now });
+  await chrome.storage.local.set({ [NOTIFY_KEY]: nextBook });
+  if (chrome.notifications && chrome.notifications.create) {
+    try {
+      chrome.notifications.create("", {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "Asqav Shadow AI Capture",
+        message,
+        priority: 0,
+      });
+    } catch (_err) {
+      // best-effort
+    }
+  }
+}
+
+/**
+ * Categorise a fetch failure into a short error class so notifications are
+ * throttled per category rather than per request.
+ *
+ * @param {unknown} err
+ * @param {number | undefined} status
+ * @returns {string}
+ */
+function classifyError(err, status) {
+  if (status && status >= 500) return "server_5xx";
+  if (status && status >= 400) return "client_4xx";
+  if (err && typeof err === "object" && err.name === "AbortError") {
+    return "abort";
+  }
+  return "network";
+}
+
+/**
+ * Attempt to POST a receipt. Returns { ok, status } on success or any
+ * non-network error response, throws on transport failure.
+ *
+ * @param {{ endpoint: string, apiKey: string, body: object }} req
+ * @param {{ fetchImpl?: typeof fetch }} [deps]
+ */
+async function postReceipt(req, deps = {}) {
+  const fetchImpl = deps.fetchImpl || globalThis.fetch;
+  const res = await fetchImpl(req.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": req.apiKey,
+    },
+    body: JSON.stringify(req.body),
+  });
+  return { ok: Boolean(res.ok), status: res.status };
+}
+
+/**
+ * Emit a receipt for one observed AI-tool navigation. Network failure or any
+ * non-2xx response queues the receipt for the retry alarm to drain.
  *
  * @param {{ url: string, tabId: number }} navEvent
- * @param {{ fetchImpl?: typeof fetch, now?: () => string }} [deps]
- * @returns {Promise<{ ok: boolean, status?: number, skipped?: string }>}
+ * @param {{ fetchImpl?: typeof fetch, now?: () => string, nowMs?: () => number }} [deps]
+ * @returns {Promise<{ ok: boolean, status?: number, skipped?: string, queued?: boolean }>}
  */
 async function emitReceipt(navEvent, deps = {}) {
   if (!isAiDomain(navEvent.url)) {
@@ -220,7 +365,6 @@ async function emitReceipt(navEvent, deps = {}) {
   if (!config) {
     return { ok: false, skipped: "no_config" };
   }
-  const fetchImpl = deps.fetchImpl || globalThis.fetch;
   const now = deps.now || (() => new Date().toISOString());
   const domain = new URL(navEvent.url).hostname.toLowerCase();
   const userId = (await getProfileEmail()) || ("agent:" + config.agentId);
@@ -232,15 +376,85 @@ async function emitReceipt(navEvent, deps = {}) {
   });
   const endpoint =
     ASQAV_ENDPOINT_BASE + "/" + encodeURIComponent(config.agentId) + "/sign";
-  const res = await fetchImpl(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": config.apiKey,
-    },
-    body: JSON.stringify(body),
-  });
-  return { ok: res.ok, status: res.status };
+  const req = { endpoint, apiKey: config.apiKey, body };
+  try {
+    const res = await postReceipt(req, deps);
+    if (res.ok) {
+      return { ok: true, status: res.status };
+    }
+    // Non-2xx: queue and notify (throttled).
+    await enqueuePending({
+      endpoint,
+      apiKey: config.apiKey,
+      body,
+      enqueuedAt: now(),
+    });
+    const cls = classifyError(null, res.status);
+    await maybeNotify(
+      cls,
+      "Receipt POST failed (" + cls + "). Queued for retry.",
+      deps,
+    );
+    return { ok: false, status: res.status, queued: true };
+  } catch (err) {
+    await enqueuePending({
+      endpoint,
+      apiKey: config.apiKey,
+      body,
+      enqueuedAt: now(),
+    });
+    const cls = classifyError(err, undefined);
+    await maybeNotify(
+      cls,
+      "Receipt POST failed (" + cls + "). Queued for retry.",
+      deps,
+    );
+    return { ok: false, queued: true };
+  }
+}
+
+/**
+ * Drain the pending queue. Each entry is retried once per call; entries that
+ * still fail go to the back of the queue. Bounded by PENDING_QUEUE_MAX so the
+ * loop runs in O(n) per tick.
+ *
+ * @param {{ fetchImpl?: typeof fetch, now?: () => string, nowMs?: () => number }} [deps]
+ * @returns {Promise<{ attempted: number, succeeded: number, remaining: number }>}
+ */
+async function drainPending(deps = {}) {
+  const pending = await getPending();
+  if (pending.length === 0) {
+    return { attempted: 0, succeeded: 0, remaining: 0 };
+  }
+  const stillPending = [];
+  let succeeded = 0;
+  for (const entry of pending) {
+    try {
+      const res = await postReceipt(entry, deps);
+      if (res.ok) {
+        succeeded += 1;
+      } else {
+        stillPending.push(entry);
+      }
+    } catch (_err) {
+      stillPending.push(entry);
+    }
+  }
+  await setPending(stillPending);
+  if (stillPending.length > 0) {
+    await maybeNotify(
+      "retry_partial",
+      "Asqav retry queue still has " +
+        stillPending.length +
+        " pending receipt(s).",
+      deps,
+    );
+  }
+  return {
+    attempted: pending.length,
+    succeeded,
+    remaining: stillPending.length,
+  };
 }
 
 /**
@@ -264,9 +478,33 @@ function registerTabListener() {
   });
 }
 
-// Register on cold start. In Jest the chrome global is mocked, so this is a
-// safe call even outside the browser.
+/**
+ * Register the chrome.alarms tick that drains the retry queue every
+ * RETRY_ALARM_MINUTES minutes. Also creates the alarm if it does not exist.
+ */
+function registerRetryAlarm() {
+  if (!globalThis.chrome || !chrome.alarms) return;
+  try {
+    chrome.alarms.create(RETRY_ALARM_NAME, {
+      periodInMinutes: RETRY_ALARM_MINUTES,
+    });
+  } catch (_err) {
+    // alarms.create can throw in odd environments; the listener is the
+    // important half.
+  }
+  if (chrome.alarms.onAlarm && chrome.alarms.onAlarm.addListener) {
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm && alarm.name === RETRY_ALARM_NAME) {
+        void drainPending();
+      }
+    });
+  }
+}
+
+// Register on cold start. In Jest the chrome global is mocked, so these are
+// safe calls even outside the browser.
 registerTabListener();
+registerRetryAlarm();
 
 // Test-only export. The MV3 service worker ignores module.exports but Jest
 // (CommonJS) picks it up so the unit tests can drive the pure functions
@@ -279,11 +517,26 @@ if (typeof module !== "undefined" && module.exports) {
     jcsStringify,
     sha256Tag,
     registerTabListener,
+    registerRetryAlarm,
+    enqueuePending,
+    getPending,
+    setPending,
+    drainPending,
+    maybeNotify,
+    classifyError,
+    postReceipt,
+    loadConfig,
     AI_DOMAIN_SEED,
     AI_DOMAIN_PATH_SCOPED,
     ASQAV_ENDPOINT_BASE,
     RECEIPT_TYPE,
     ACTION_TYPE,
     CAPTURE_TOPOLOGY,
+    PENDING_QUEUE_KEY,
+    PENDING_QUEUE_MAX,
+    RETRY_ALARM_NAME,
+    RETRY_ALARM_MINUTES,
+    NOTIFY_THROTTLE_MS,
+    NOTIFY_KEY,
   };
 }

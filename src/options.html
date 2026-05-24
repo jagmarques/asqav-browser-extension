@@ -7,13 +7,18 @@
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
           sans-serif;
-        max-width: 28rem;
+        max-width: 32rem;
         margin: 2rem auto;
         padding: 0 1rem;
         color: #1a1a1a;
       }
       h1 {
         font-size: 1.25rem;
+        margin-bottom: 0.5rem;
+      }
+      h2 {
+        font-size: 1rem;
+        margin-top: 2rem;
         margin-bottom: 0.5rem;
       }
       p {
@@ -46,13 +51,39 @@
         cursor: pointer;
         font-weight: 600;
       }
+      button.secondary {
+        background: #1f7a4e;
+      }
       button:hover {
         background: #0353e9;
+      }
+      button.secondary:hover {
+        background: #186040;
       }
       .status {
         margin-top: 1rem;
         font-size: 0.85rem;
         color: #006400;
+      }
+      .note {
+        margin-top: 0.5rem;
+        font-size: 0.8rem;
+        color: #555;
+        background: #f4f4f4;
+        border-left: 3px solid #c8c8c8;
+        padding: 0.5rem 0.75rem;
+        border-radius: 2px;
+      }
+      .perm-status {
+        margin-top: 0.5rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+      }
+      .perm-status.granted {
+        color: #006400;
+      }
+      .perm-status.denied {
+        color: #a40000;
       }
     </style>
   </head>
@@ -63,6 +94,8 @@
       Metadata-only receipts are emitted to api.asqav.com when a managed user
       navigates to a known AI tool.
     </p>
+
+    <h2>Credentials</h2>
     <form id="config-form">
       <label for="api-key">API Key</label>
       <input
@@ -72,6 +105,12 @@
         autocomplete="off"
         spellcheck="false"
       />
+      <p class="note">
+        The API key is stored in chrome.storage.session (in-memory, cleared on
+        browser restart) so it is not readable by other extensions with the
+        storage permission. Re-enter after each browser restart, or rotate via
+        the Asqav dashboard if you suspect compromise.
+      </p>
       <label for="agent-id">Agent ID</label>
       <input
         type="text"
@@ -83,6 +122,19 @@
       <button type="submit">Save</button>
     </form>
     <div class="status" id="status"></div>
+
+    <h2>AI tool detection</h2>
+    <p>
+      Detection of navigation to AI tools requires host permissions for the
+      seed list of AI domains. Click below to grant these at runtime. The
+      extension cannot read or modify pages on any other domain.
+    </p>
+    <button type="button" class="secondary" id="enable-detection">
+      Enable Detection
+    </button>
+    <button type="button" id="disable-detection">Disable Detection</button>
+    <div class="perm-status" id="perm-status"></div>
+
     <script src="options.js"></script>
   </body>
 </html>

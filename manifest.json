@@ -3,8 +3,8 @@
   "name": "Asqav Shadow AI Capture",
   "version": "0.1.0",
   "description": "Emit IETF-aligned compliance receipts for AI tool use observed in the browser.",
-  "permissions": ["tabs", "storage", "declarativeNetRequest"],
-  "host_permissions": [
+  "permissions": ["tabs", "storage", "declarativeNetRequest", "alarms", "notifications"],
+  "optional_host_permissions": [
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
     "https://openai.com/*",
@@ -34,7 +34,13 @@
     "https://x.ai/*",
     "https://grok.x.ai/*"
   ],
+  "host_permissions": ["https://api.asqav.com/*"],
   "background": { "service_worker": "src/background.js" },
   "options_page": "src/options.html",
-  "icons": {}
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }
