@@ -9,3 +9,5 @@ dist/
 .planning/
 .claude/
 .company/
+test-results/
+playwright-report/

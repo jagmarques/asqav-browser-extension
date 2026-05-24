@@ -97,6 +97,41 @@ function permissionsRemove(perms) {
 }
 
 /**
+ * Refresh the reliability metric counters shown on the options page.
+ * Reads chrome.storage.local directly so this stays decoupled from the
+ * background service worker. Best-effort; missing keys read as 0.
+ */
+async function refreshMetrics() {
+  if (!chrome.storage || !chrome.storage.local) return;
+  try {
+    const fields = await chrome.storage.local.get([
+      "pendingReceipts",
+      "pendingReceiptsArchive",
+      "metricsReceiptsDropped",
+      "metricsArchiveOverflow",
+    ]);
+    const queueSize = Array.isArray(fields.pendingReceipts)
+      ? fields.pendingReceipts.length
+      : 0;
+    const archiveSize = Array.isArray(fields.pendingReceiptsArchive)
+      ? fields.pendingReceiptsArchive.length
+      : 0;
+    const dropped = Number(fields.metricsReceiptsDropped || 0);
+    const archiveOverflow = Number(fields.metricsArchiveOverflow || 0);
+    const qEl = document.getElementById("metric-queue");
+    const aEl = document.getElementById("metric-archive");
+    const dEl = document.getElementById("metric-dropped");
+    const oEl = document.getElementById("metric-archive-overflow");
+    if (qEl) qEl.textContent = String(queueSize);
+    if (aEl) aEl.textContent = String(archiveSize);
+    if (dEl) dEl.textContent = String(dropped);
+    if (oEl) oEl.textContent = String(archiveOverflow);
+  } catch (_err) {
+    // best-effort
+  }
+}
+
+/**
  * Refresh the on-page permission state label.
  */
 async function refreshPermStatus(el) {
@@ -129,6 +164,7 @@ async function refreshPermStatus(el) {
   }
 
   await refreshPermStatus(permStatusEl);
+  await refreshMetrics();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();

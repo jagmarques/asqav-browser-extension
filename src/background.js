@@ -18,6 +18,15 @@
  *   - chrome.notifications fires at most once per hour per error class so
  *     operators learn about persistent failures without notification spam.
  *
+ * Cycle 26 hardening:
+ *   - Retry-queue overflow no longer silently drops entries. Overflowed
+ *     receipts move to an archive bounded at PENDING_ARCHIVE_MAX. A counter
+ *     metricsReceiptsDropped is incremented on every overflow and surfaced on
+ *     the options page so SOC tooling can detect evidence loss.
+ *   - chrome.storage.managed policy hook auto-enables detection, host
+ *     permissions, and credentials on MDM-managed devices via the keys
+ *     mdmAutoEnable, mdmApiKey, mdmApiEndpoint, mdmManagedHosts.
+ *
  * Cloud dependency: the cloud's SignRequest receipt_type Literal must include
  * "protectmcp:observation" before posts from this extension are accepted.
  */
@@ -30,6 +39,10 @@ const CAPTURE_TOPOLOGY = "browser_extension";
 // Retry queue knobs.
 const PENDING_QUEUE_KEY = "pendingReceipts";
 const PENDING_QUEUE_MAX = 100;
+const PENDING_ARCHIVE_KEY = "pendingReceiptsArchive";
+const PENDING_ARCHIVE_MAX = 1000;
+const METRICS_DROPPED_KEY = "metricsReceiptsDropped";
+const METRICS_ARCHIVE_OVERFLOW_KEY = "metricsArchiveOverflow";
 const RETRY_ALARM_NAME = "asqav-retry-pending";
 const RETRY_ALARM_MINUTES = 5;
 
@@ -37,6 +50,18 @@ const RETRY_ALARM_MINUTES = 5;
 // chrome.storage.local under the "errorNotifiedAt" object.
 const NOTIFY_THROTTLE_MS = 60 * 60 * 1000;
 const NOTIFY_KEY = "errorNotifiedAt";
+
+// MDM policy keys read from chrome.storage.managed.
+const MDM_KEYS = [
+  "mdmAutoEnable",
+  "mdmApiKey",
+  "mdmApiEndpoint",
+  "mdmManagedHosts",
+];
+
+// Override of the default endpoint base, set by the MDM hook when
+// mdmApiEndpoint is present. Read by emitReceipt and drainPending.
+let runtimeEndpointBase = ASQAV_ENDPOINT_BASE;
 
 // Inlined seed list (the JSON file is bundled but the service worker must not
 // rely on fetch() against extension-local URLs in MV3 cold-start paths).
@@ -235,22 +260,97 @@ async function getProfileEmail() {
 }
 
 /**
- * Append a failed receipt to the pending queue. FIFO drop once the queue
- * exceeds PENDING_QUEUE_MAX so we never grow without bound.
+ * Append a failed receipt to the pending queue. When the queue exceeds
+ * PENDING_QUEUE_MAX the oldest entry is MOVED to the archive (not dropped)
+ * and the metricsReceiptsDropped counter is incremented so a SOC monitoring
+ * the extension can detect that receipts overflowed the live queue. If the
+ * archive itself overflows, the very oldest archive entry is removed and the
+ * metricsArchiveOverflow counter is incremented; a notification fires so the
+ * operator learns about evidence loss.
  *
  * @param {{ endpoint: string, apiKey: string, body: object, enqueuedAt: string }} entry
+ * @param {{ nowMs?: () => number }} [deps]
  */
-async function enqueuePending(entry) {
+async function enqueuePending(entry, deps = {}) {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
-  const { [PENDING_QUEUE_KEY]: existing = [] } = await chrome.storage.local.get(
-    [PENDING_QUEUE_KEY],
-  );
-  const next = Array.isArray(existing) ? existing.slice() : [];
-  next.push(entry);
-  while (next.length > PENDING_QUEUE_MAX) {
-    next.shift();
+  const fields = await chrome.storage.local.get([
+    PENDING_QUEUE_KEY,
+    PENDING_ARCHIVE_KEY,
+    METRICS_DROPPED_KEY,
+    METRICS_ARCHIVE_OVERFLOW_KEY,
+  ]);
+  const existing = Array.isArray(fields[PENDING_QUEUE_KEY])
+    ? fields[PENDING_QUEUE_KEY].slice()
+    : [];
+  const archive = Array.isArray(fields[PENDING_ARCHIVE_KEY])
+    ? fields[PENDING_ARCHIVE_KEY].slice()
+    : [];
+  let droppedCount = Number(fields[METRICS_DROPPED_KEY] || 0);
+  let archiveOverflow = Number(fields[METRICS_ARCHIVE_OVERFLOW_KEY] || 0);
+
+  existing.push(entry);
+  let archiveTriggered = false;
+  let archiveOverflowTriggered = false;
+  while (existing.length > PENDING_QUEUE_MAX) {
+    const evicted = existing.shift();
+    droppedCount += 1;
+    archiveTriggered = true;
+    archive.push(evicted);
+    while (archive.length > PENDING_ARCHIVE_MAX) {
+      archive.shift();
+      archiveOverflow += 1;
+      archiveOverflowTriggered = true;
+    }
   }
-  await chrome.storage.local.set({ [PENDING_QUEUE_KEY]: next });
+
+  await chrome.storage.local.set({
+    [PENDING_QUEUE_KEY]: existing,
+    [PENDING_ARCHIVE_KEY]: archive,
+    [METRICS_DROPPED_KEY]: droppedCount,
+    [METRICS_ARCHIVE_OVERFLOW_KEY]: archiveOverflow,
+  });
+
+  if (archiveTriggered) {
+    // Structured event for SOC log scrapers tailing the service-worker console.
+    try {
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify({
+          event: "asqav.receipt.queue_overflow",
+          dropped_total: droppedCount,
+          archive_size: archive.length,
+          archive_overflow_total: archiveOverflow,
+        }),
+      );
+    } catch (_err) {
+      // best-effort
+    }
+    await maybeNotify(
+      "queue_overflow",
+      "Asqav retry queue overflowed. " +
+        droppedCount +
+        " receipt(s) moved to archive. Check the options page.",
+      deps,
+    );
+  }
+  if (archiveOverflowTriggered) {
+    try {
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify({
+          event: "asqav.receipt.archive_overflow",
+          archive_overflow_total: archiveOverflow,
+        }),
+      );
+    } catch (_err) {
+      // best-effort
+    }
+    await maybeNotify(
+      "archive_overflow",
+      "Asqav receipt archive full. Evidence is being lost. Contact your Asqav admin.",
+      deps,
+    );
+  }
 }
 
 /**
@@ -274,6 +374,47 @@ async function getPending() {
     [PENDING_QUEUE_KEY],
   );
   return Array.isArray(existing) ? existing : [];
+}
+
+/**
+ * Read the archive queue (always returns an array). The archive holds entries
+ * that overflowed the live retry queue so SOC tooling can inspect lost
+ * evidence and the options page can surface counts.
+ *
+ * @returns {Promise<Array>}
+ */
+async function getArchive() {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return [];
+  const { [PENDING_ARCHIVE_KEY]: existing = [] } =
+    await chrome.storage.local.get([PENDING_ARCHIVE_KEY]);
+  return Array.isArray(existing) ? existing : [];
+}
+
+/**
+ * Read the dropped-receipt metrics counters.
+ *
+ * @returns {Promise<{ dropped: number, archiveOverflow: number, archiveSize: number, queueSize: number }>}
+ */
+async function getDropMetrics() {
+  if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) {
+    return { dropped: 0, archiveOverflow: 0, archiveSize: 0, queueSize: 0 };
+  }
+  const fields = await chrome.storage.local.get([
+    METRICS_DROPPED_KEY,
+    METRICS_ARCHIVE_OVERFLOW_KEY,
+    PENDING_ARCHIVE_KEY,
+    PENDING_QUEUE_KEY,
+  ]);
+  return {
+    dropped: Number(fields[METRICS_DROPPED_KEY] || 0),
+    archiveOverflow: Number(fields[METRICS_ARCHIVE_OVERFLOW_KEY] || 0),
+    archiveSize: Array.isArray(fields[PENDING_ARCHIVE_KEY])
+      ? fields[PENDING_ARCHIVE_KEY].length
+      : 0,
+    queueSize: Array.isArray(fields[PENDING_QUEUE_KEY])
+      ? fields[PENDING_QUEUE_KEY].length
+      : 0,
+  };
 }
 
 /**
@@ -374,8 +515,9 @@ async function emitReceipt(navEvent, deps = {}) {
     observedAt: now(),
     userId,
   });
+  const base = deps.endpointBase || runtimeEndpointBase;
   const endpoint =
-    ASQAV_ENDPOINT_BASE + "/" + encodeURIComponent(config.agentId) + "/sign";
+    base + "/" + encodeURIComponent(config.agentId) + "/sign";
   const req = { endpoint, apiKey: config.apiKey, body };
   try {
     const res = await postReceipt(req, deps);
@@ -383,12 +525,15 @@ async function emitReceipt(navEvent, deps = {}) {
       return { ok: true, status: res.status };
     }
     // Non-2xx: queue and notify (throttled).
-    await enqueuePending({
-      endpoint,
-      apiKey: config.apiKey,
-      body,
-      enqueuedAt: now(),
-    });
+    await enqueuePending(
+      {
+        endpoint,
+        apiKey: config.apiKey,
+        body,
+        enqueuedAt: now(),
+      },
+      deps,
+    );
     const cls = classifyError(null, res.status);
     await maybeNotify(
       cls,
@@ -397,12 +542,15 @@ async function emitReceipt(navEvent, deps = {}) {
     );
     return { ok: false, status: res.status, queued: true };
   } catch (err) {
-    await enqueuePending({
-      endpoint,
-      apiKey: config.apiKey,
-      body,
-      enqueuedAt: now(),
-    });
+    await enqueuePending(
+      {
+        endpoint,
+        apiKey: config.apiKey,
+        body,
+        enqueuedAt: now(),
+      },
+      deps,
+    );
     const cls = classifyError(err, undefined);
     await maybeNotify(
       cls,
@@ -458,6 +606,114 @@ async function drainPending(deps = {}) {
 }
 
 /**
+ * Read chrome.storage.managed and, when mdmAutoEnable is true, auto-grant
+ * optional host permissions for the managed host patterns, auto-enable
+ * detection, and seed apiKey + agentId + endpoint overrides from the MDM
+ * policy. Chrome auto-grants permission requests that originate from MDM
+ * policy without prompting the user.
+ *
+ * Safe to call from chrome.runtime.onInstalled and chrome.runtime.onStartup.
+ * No-ops gracefully when chrome.storage.managed is unavailable (e.g., in
+ * unmanaged Chromium or in the Jest harness without an explicit mock).
+ *
+ * @param {{ permissionsRequestImpl?: Function }} [deps]
+ * @returns {Promise<{ ran: boolean, granted?: boolean, hostsRequested?: number, endpointOverridden?: boolean }>}
+ */
+async function applyManagedPolicy(deps = {}) {
+  if (
+    !globalThis.chrome ||
+    !chrome.storage ||
+    !chrome.storage.managed ||
+    typeof chrome.storage.managed.get !== "function"
+  ) {
+    return { ran: false };
+  }
+  let policy;
+  try {
+    policy = await chrome.storage.managed.get(MDM_KEYS);
+  } catch (_err) {
+    return { ran: false };
+  }
+  if (!policy || policy.mdmAutoEnable !== true) {
+    return { ran: false };
+  }
+
+  // Seed credentials and endpoint overrides first so that any receipts
+  // emitted before the permission grant resolves still use the right values.
+  if (chrome.storage.session && chrome.storage.session.set && policy.mdmApiKey) {
+    try {
+      await chrome.storage.session.set({ apiKey: String(policy.mdmApiKey) });
+    } catch (_err) {
+      // best-effort
+    }
+  }
+  if (policy.mdmApiEndpoint && typeof policy.mdmApiEndpoint === "string") {
+    runtimeEndpointBase = policy.mdmApiEndpoint;
+    try {
+      await chrome.storage.local.set({
+        apiEndpoint: policy.mdmApiEndpoint,
+      });
+    } catch (_err) {
+      // best-effort
+    }
+  }
+  try {
+    await chrome.storage.local.set({ detectionEnabled: true });
+  } catch (_err) {
+    // best-effort
+  }
+
+  // Request the optional host permissions. MDM-policy-granted requests are
+  // resolved without a user prompt by Chrome.
+  const hosts = Array.isArray(policy.mdmManagedHosts)
+    ? policy.mdmManagedHosts
+    : AI_DOMAIN_SEED.map((h) => "https://" + h + "/*");
+  let granted = false;
+  let hostsRequested = hosts.length;
+  if (chrome.permissions && chrome.permissions.request) {
+    try {
+      const requestImpl =
+        deps.permissionsRequestImpl ||
+        ((perms) =>
+          new Promise((resolve) => {
+            try {
+              chrome.permissions.request(perms, (ok) => resolve(Boolean(ok)));
+            } catch (_err) {
+              resolve(false);
+            }
+          }));
+      granted = await requestImpl({ origins: hosts });
+    } catch (_err) {
+      granted = false;
+    }
+  }
+  return {
+    ran: true,
+    granted,
+    hostsRequested,
+    endpointOverridden: Boolean(policy.mdmApiEndpoint),
+  };
+}
+
+/**
+ * Register chrome.runtime.onInstalled and chrome.runtime.onStartup so the
+ * MDM policy is applied whenever the extension boots.
+ */
+function registerManagedPolicyHooks() {
+  if (!globalThis.chrome || !chrome.runtime) return;
+  if (chrome.runtime.onInstalled && chrome.runtime.onInstalled.addListener) {
+    chrome.runtime.onInstalled.addListener(() => {
+      void applyManagedPolicy();
+    });
+  }
+  if (chrome.runtime.onStartup && chrome.runtime.onStartup.addListener) {
+    chrome.runtime.onStartup.addListener(() => {
+      void applyManagedPolicy();
+    });
+  }
+}
+
+/**
  * Wire the chrome.tabs.onUpdated listener. Called once at service-worker
  * cold start.
  */
@@ -505,6 +761,11 @@ function registerRetryAlarm() {
 // safe calls even outside the browser.
 registerTabListener();
 registerRetryAlarm();
+registerManagedPolicyHooks();
+// Best-effort: apply the MDM policy immediately on cold start too, so a
+// freshly installed managed device begins capturing on the first navigation
+// rather than waiting for the next onStartup event.
+void applyManagedPolicy();
 
 // Test-only export. The MV3 service worker ignores module.exports but Jest
 // (CommonJS) picks it up so the unit tests can drive the pure functions
@@ -518,8 +779,12 @@ if (typeof module !== "undefined" && module.exports) {
     sha256Tag,
     registerTabListener,
     registerRetryAlarm,
+    registerManagedPolicyHooks,
+    applyManagedPolicy,
     enqueuePending,
     getPending,
+    getArchive,
+    getDropMetrics,
     setPending,
     drainPending,
     maybeNotify,
@@ -534,9 +799,14 @@ if (typeof module !== "undefined" && module.exports) {
     CAPTURE_TOPOLOGY,
     PENDING_QUEUE_KEY,
     PENDING_QUEUE_MAX,
+    PENDING_ARCHIVE_KEY,
+    PENDING_ARCHIVE_MAX,
+    METRICS_DROPPED_KEY,
+    METRICS_ARCHIVE_OVERFLOW_KEY,
     RETRY_ALARM_NAME,
     RETRY_ALARM_MINUTES,
     NOTIFY_THROTTLE_MS,
     NOTIFY_KEY,
+    MDM_KEYS,
   };
 }

@@ -135,6 +135,22 @@
     <button type="button" id="disable-detection">Disable Detection</button>
     <div class="perm-status" id="perm-status"></div>
 
+    <h2>Reliability metrics</h2>
+    <p>
+      Counters from the local retry queue. If "Receipts dropped" is non-zero
+      the live queue overflowed and entries were moved to the archive; if
+      "Archive overflow" is non-zero the archive itself overflowed and
+      receipts were lost. Both events also fire a desktop notification.
+    </p>
+    <div class="note" id="metrics">
+      <div>Queue size: <span id="metric-queue">0</span></div>
+      <div>Archive size: <span id="metric-archive">0</span></div>
+      <div>Receipts dropped (lifetime): <span id="metric-dropped">0</span></div>
+      <div>
+        Archive overflow (lifetime): <span id="metric-archive-overflow">0</span>
+      </div>
+    </div>
+
     <script src="options.js"></script>
   </body>
 </html>
