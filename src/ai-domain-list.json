@@ -1,0 +1,42 @@
+{
+  "version": "0.1.0",
+  "updated_at": "2026-05-24",
+  "sources": [
+    "Cloudflare AI Gateway public domain list",
+    "Push Security public shadow-AI tracker"
+  ],
+  "license_note": "Seed entries derived from public, openly published shadow-AI domain catalogues. Asqav adds, removes, or re-classifies entries based on observed customer traffic patterns.",
+  "domains": [
+    "chat.openai.com",
+    "chatgpt.com",
+    "openai.com",
+    "platform.openai.com",
+    "api.openai.com",
+    "claude.ai",
+    "anthropic.com",
+    "api.anthropic.com",
+    "gemini.google.com",
+    "bard.google.com",
+    "generativelanguage.googleapis.com",
+    "copilot.microsoft.com",
+    "github.com",
+    "perplexity.ai",
+    "www.perplexity.ai",
+    "mistral.ai",
+    "chat.mistral.ai",
+    "api.mistral.ai",
+    "cohere.com",
+    "cohere.ai",
+    "dashboard.cohere.com",
+    "huggingface.co",
+    "hf.co",
+    "you.com",
+    "phind.com",
+    "xai.com",
+    "x.ai",
+    "grok.x.ai"
+  ],
+  "path_scoped": {
+    "github.com": ["/copilot", "/copilot/*"]
+  }
+}

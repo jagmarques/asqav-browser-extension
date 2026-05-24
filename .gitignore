@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.DS_Store
+dist/
+*.zip
+*.crx
+.env
+.env.*
+.planning/
+.claude/
+.company/
