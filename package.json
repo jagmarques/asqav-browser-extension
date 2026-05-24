@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Chromium MV3 extension that emits IETF-aligned compliance receipts for AI tool use observed in the browser.",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "MIT",
   "scripts": {
     "test": "jest --no-coverage"
   },

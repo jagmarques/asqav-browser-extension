@@ -11,6 +11,6 @@ Deployment guides:
 - [`docs/DEPLOY-INTUNE.md`](docs/DEPLOY-INTUNE.md)
 - [`docs/DEPLOY-JAMF.md`](docs/DEPLOY-JAMF.md)
 
-License: Apache-2.0.
+License: MIT.
 
 comment hygiene clean
