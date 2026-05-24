@@ -23,6 +23,9 @@ const tabListeners = [];
 const alarmListeners = [];
 const createdAlarms = [];
 const createdNotifications = [];
+const onInstalledListeners = [];
+const onStartupListeners = [];
+const permissionsRequests = [];
 global.chrome = {
   tabs: {
     onUpdated: {
@@ -62,6 +65,18 @@ global.chrome = {
         return Promise.resolve();
       },
     },
+    managed: {
+      _store: {},
+      get: (keys) =>
+        Promise.resolve(
+          Object.fromEntries(
+            (Array.isArray(keys) ? keys : [keys]).map((k) => [
+              k,
+              global.chrome.storage.managed._store[k],
+            ]),
+          ),
+        ),
+    },
   },
   identity: {
     getProfileUserInfo: (cb) => cb({ email: "" }),
@@ -74,6 +89,20 @@ global.chrome = {
   },
   notifications: {
     create: (id, opts) => createdNotifications.push({ id, opts }),
+  },
+  runtime: {
+    onInstalled: {
+      addListener: (fn) => onInstalledListeners.push(fn),
+    },
+    onStartup: {
+      addListener: (fn) => onStartupListeners.push(fn),
+    },
+  },
+  permissions: {
+    request: (perms, cb) => {
+      permissionsRequests.push(perms);
+      if (typeof cb === "function") cb(true);
+    },
   },
 };
 
@@ -91,7 +120,9 @@ const bg = require("../src/background.js");
 function resetStores() {
   global.chrome.storage.local._store = {};
   global.chrome.storage.session._store = {};
+  global.chrome.storage.managed._store = {};
   createdNotifications.length = 0;
+  permissionsRequests.length = 0;
 }
 
 // --- 1. AI-domain detection --------------------------------------------------
@@ -272,7 +303,9 @@ describe("retry queue", () => {
     expect(pending.length).toBe(1);
   });
 
-  test("queue is FIFO-capped at PENDING_QUEUE_MAX", async () => {
+  test("queue is FIFO-capped at PENDING_QUEUE_MAX and evicts to archive", async () => {
+    // Silence the SOC-observability structured log during this assertion.
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     // Pre-seed past the cap with synthetic entries.
     const seed = [];
     for (let i = 0; i < bg.PENDING_QUEUE_MAX; i += 1) {
@@ -287,9 +320,57 @@ describe("retry queue", () => {
     });
     const pending = await bg.getPending();
     expect(pending.length).toBe(bg.PENDING_QUEUE_MAX);
-    // Oldest dropped, newest at tail.
+    // Oldest moved to archive, newest at tail.
     expect(pending[0].body.i).toBe(1);
     expect(pending[pending.length - 1].body.i).toBe("new");
+    // The evicted entry must not be silently lost.
+    const archive = await bg.getArchive();
+    expect(archive.length).toBe(1);
+    expect(archive[0].body.i).toBe(0);
+    const metrics = await bg.getDropMetrics();
+    expect(metrics.dropped).toBe(1);
+    expect(metrics.archiveOverflow).toBe(0);
+    errSpy.mockRestore();
+  });
+
+  test("archive overflow increments archiveOverflow counter and notifies", async () => {
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    // Fill queue to cap, then archive to cap, then enqueue once more.
+    const queueSeed = [];
+    for (let i = 0; i < bg.PENDING_QUEUE_MAX; i += 1) {
+      queueSeed.push({
+        endpoint: "x",
+        apiKey: "k",
+        body: { i },
+        enqueuedAt: "t",
+      });
+    }
+    await bg.setPending(queueSeed);
+    const archiveSeed = [];
+    for (let i = 0; i < bg.PENDING_ARCHIVE_MAX; i += 1) {
+      archiveSeed.push({
+        endpoint: "x",
+        apiKey: "k",
+        body: { ai: i },
+        enqueuedAt: "t",
+      });
+    }
+    await global.chrome.storage.local.set({
+      [bg.PENDING_ARCHIVE_KEY]: archiveSeed,
+    });
+    await bg.enqueuePending({
+      endpoint: "y",
+      apiKey: "k",
+      body: { i: "new" },
+      enqueuedAt: "t",
+    });
+    const metrics = await bg.getDropMetrics();
+    expect(metrics.dropped).toBe(1);
+    expect(metrics.archiveOverflow).toBe(1);
+    expect(metrics.archiveSize).toBe(bg.PENDING_ARCHIVE_MAX);
+    // A queue_overflow OR archive_overflow notification fired.
+    expect(createdNotifications.length).toBeGreaterThan(0);
+    errSpy.mockRestore();
   });
 
   test("drainPending retries entries and clears on 2xx", async () => {
@@ -414,5 +495,71 @@ describe("classifyError", () => {
     expect(bg.classifyError(new TypeError("offline"), undefined)).toBe(
       "network",
     );
+  });
+});
+
+// --- 9. MDM managed-policy hook ---------------------------------------------
+
+describe("applyManagedPolicy", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("no-ops when mdmAutoEnable is absent", async () => {
+    const result = await bg.applyManagedPolicy();
+    expect(result.ran).toBe(false);
+    expect(permissionsRequests.length).toBe(0);
+  });
+
+  test("no-ops when mdmAutoEnable is false", async () => {
+    global.chrome.storage.managed._store = { mdmAutoEnable: false };
+    const result = await bg.applyManagedPolicy();
+    expect(result.ran).toBe(false);
+  });
+
+  test("requests host permissions and seeds credentials when mdmAutoEnable is true", async () => {
+    global.chrome.storage.managed._store = {
+      mdmAutoEnable: true,
+      mdmApiKey: "mdm-key-123",
+      mdmApiEndpoint: "https://signer.private.example.com/api/v1/agents",
+      mdmManagedHosts: ["https://chat.openai.com/*", "https://claude.ai/*"],
+    };
+    const result = await bg.applyManagedPolicy();
+    expect(result.ran).toBe(true);
+    expect(result.granted).toBe(true);
+    expect(result.endpointOverridden).toBe(true);
+    expect(result.hostsRequested).toBe(2);
+    // Credentials seeded into session storage.
+    expect(global.chrome.storage.session._store.apiKey).toBe("mdm-key-123");
+    // Endpoint persisted to local for the options page to display.
+    expect(global.chrome.storage.local._store.apiEndpoint).toBe(
+      "https://signer.private.example.com/api/v1/agents",
+    );
+    // detectionEnabled flag toggled.
+    expect(global.chrome.storage.local._store.detectionEnabled).toBe(true);
+    // Permissions request fired for the managed hosts.
+    expect(permissionsRequests.length).toBe(1);
+    expect(permissionsRequests[0].origins).toEqual([
+      "https://chat.openai.com/*",
+      "https://claude.ai/*",
+    ]);
+  });
+
+  test("falls back to AI_DOMAIN_SEED when mdmManagedHosts is absent", async () => {
+    global.chrome.storage.managed._store = {
+      mdmAutoEnable: true,
+      mdmApiKey: "k",
+    };
+    const result = await bg.applyManagedPolicy();
+    expect(result.ran).toBe(true);
+    expect(result.hostsRequested).toBe(bg.AI_DOMAIN_SEED.length);
+    expect(permissionsRequests[0].origins.length).toBe(
+      bg.AI_DOMAIN_SEED.length,
+    );
+  });
+
+  test("runtime onInstalled and onStartup listeners are registered on cold start", () => {
+    expect(onInstalledListeners.length).toBeGreaterThan(0);
+    expect(onStartupListeners.length).toBeGreaterThan(0);
   });
 });
