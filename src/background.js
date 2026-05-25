@@ -10,25 +10,25 @@
  * Auth:     X-API-Key header sourced from chrome.storage.session (apiKey) and
  *           chrome.storage.local (agentId).
  *
- * Cycle 25 hardening:
- *   - API key now read from chrome.storage.session (in-memory, not readable by
+ * Credential and transport contract:
+ *   - API key reads from chrome.storage.session (in-memory, not readable by
  *     other extensions, cleared on browser restart).
- *   - Failed POSTs are queued in chrome.storage.local.pendingReceipts (FIFO,
- *     cap 100) and retried by a chrome.alarms tick every 5 minutes.
+ *   - Failed POSTs queue into chrome.storage.local.pendingReceipts (FIFO,
+ *     cap 100) and retry on a chrome.alarms tick every 5 minutes.
  *   - chrome.notifications fires at most once per hour per error class so
- *     operators learn about persistent failures without notification spam.
+ *     operators see persistent failures without notification spam.
  *
- * Cycle 26 hardening:
- *   - Retry-queue overflow no longer silently drops entries. Overflowed
- *     receipts move to an archive bounded at PENDING_ARCHIVE_MAX. A counter
- *     metricsReceiptsDropped is incremented on every overflow and surfaced on
- *     the options page so SOC tooling can detect evidence loss.
+ * Overflow and MDM contract:
+ *   - Retry-queue overflow surfaces an archive bounded at PENDING_ARCHIVE_MAX
+ *     plus an incremented metricsReceiptsDropped counter rather than a silent
+ *     drop. The counter renders on the options page so SOC tooling can detect
+ *     evidence loss.
  *   - chrome.storage.managed policy hook auto-enables detection, host
  *     permissions, and credentials on MDM-managed devices via the keys
  *     mdmAutoEnable, mdmApiKey, mdmApiEndpoint, mdmManagedHosts.
  *
  * Cloud dependency: the cloud's SignRequest receipt_type Literal must include
- * "protectmcp:observation" before posts from this extension are accepted.
+ * "protectmcp:observation" for posts from this extension to be accepted.
  */
 
 const ASQAV_ENDPOINT_BASE = "https://api.asqav.com/api/v1/agents";
