@@ -1,7 +1,7 @@
 /**
  * Asqav Shadow AI Capture - options page controller.
  *
- * Storage split (hardening cycle 25):
+ * Storage split:
  *   - apiKey -> chrome.storage.session (in-memory, cleared on browser restart).
  *     Not readable by other extensions; reduces blast radius of any rogue
  *     extension with the "storage" permission.
@@ -10,7 +10,8 @@
  * Host permissions for the AI-domain seed list are declared as
  * optional_host_permissions in manifest.json and requested at runtime via
  * chrome.permissions.request when the operator clicks "Enable Detection".
- * This eliminates the install-time broad-host warning in Chrome Web Store.
+ * Keeps the install-time broad-host warning out of the Chrome Web Store
+ * listing.
  */
 
 const AI_HOST_PATTERNS = [
