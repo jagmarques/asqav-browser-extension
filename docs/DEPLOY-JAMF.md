@@ -145,19 +145,4 @@ change. The extension stops requesting permissions on startup; existing
 grants persist until the operator clicks "Disable Detection" on the options
 page or until you also remove the managed-host plist entries.
 
-## Safari Blueprint hook (future v0.5)
-
-JAMF Pro 11.5+ supports the Safari Web Extensions blueprint for declarative
-deployment of native Safari extensions. The Asqav Safari v0.5 build will ship
-as a Safari Web Extension and reuse the same receipt-emitting logic. To
-prepare:
-
-1. Reserve a JAMF blueprint slot named
-   `Safari - Asqav Shadow AI Capture force-install`.
-2. Plan to associate the Asqav Safari extension App Store bundle ID once
-   published.
-3. Until v0.5 ships, JAMF customers cover Safari users via the existing
-   network-proxy `capture_topology="network_proxy"` path documented in the
-   Asqav shadow-AI runbook.
-
 comment hygiene clean

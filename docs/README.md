@@ -62,8 +62,6 @@ Workspace and any other Chrome Enterprise console.
   observation timestamp, user id. Nothing from the page DOM is read.
 - The hash field is a SHA-256 over the JCS-canonicalised context bag, not over
   the prompt content.
-- v0.5 will add an opt-in prompt-body capture mode, off by default, governed by
-  an explicit admin toggle on the options page.
 - All POSTs go to `https://api.asqav.com` over TLS with an `X-API-Key` header.
   No raw bodies are uploaded.
 
