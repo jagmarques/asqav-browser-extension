@@ -721,9 +721,7 @@ function registerTabListener() {
   if (!globalThis.chrome || !chrome.tabs || !chrome.tabs.onUpdated) return;
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
     if (changeInfo.status !== "complete" || !changeInfo.url) {
-      // Only act on commit so we do not double-fire on title or favicon updates.
-      // changeInfo.url is populated when the URL field changes; pair with the
-      // "complete" status so we capture once per navigation.
+      // Capture once per navigation: require both a URL change and "complete" status.
       if (!(changeInfo.status === "complete" && _tab && _tab.url)) {
         return;
       }
@@ -762,14 +760,10 @@ function registerRetryAlarm() {
 registerTabListener();
 registerRetryAlarm();
 registerManagedPolicyHooks();
-// Best-effort: apply the MDM policy immediately on cold start too, so a
-// freshly installed managed device begins capturing on the first navigation
-// rather than waiting for the next onStartup event.
+// Best-effort apply on cold start so a managed device captures on first nav, not next onStartup.
 void applyManagedPolicy();
 
-// Test-only export. The MV3 service worker ignores module.exports but Jest
-// (CommonJS) picks it up so the unit tests can drive the pure functions
-// without standing up a full extension runtime.
+// Test-only export: the MV3 worker ignores module.exports but Jest (CommonJS) picks it up.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     isAiDomain,
