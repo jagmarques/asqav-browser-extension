@@ -97,5 +97,3 @@ Node 20+ `webcrypto` global.
 ## License
 
 MIT. See `LICENSE` at the repo root.
-
-comment hygiene clean

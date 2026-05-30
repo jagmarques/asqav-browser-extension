@@ -49,5 +49,3 @@ most one `chrome.notifications` toast per error class per hour so persistent
 failures surface without spamming.
 
 License: MIT.
-
-comment hygiene clean

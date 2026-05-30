@@ -176,5 +176,3 @@ the change. The extension stops requesting permissions on startup; existing
 grants persist until the operator clicks "Disable Detection" on the options
 page or until you also remove the `mdmManagedHosts` entries via the Chrome
 `ExtensionSettings` policy.
-
-comment hygiene clean

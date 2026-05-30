@@ -144,5 +144,3 @@ To disable auto-detection without uninstalling the extension, set
 change. The extension stops requesting permissions on startup; existing
 grants persist until the operator clicks "Disable Detection" on the options
 page or until you also remove the managed-host plist entries.
-
-comment hygiene clean

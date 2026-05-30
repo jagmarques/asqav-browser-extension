@@ -48,5 +48,3 @@ Running 2 tests using 1 worker
 `.github/workflows/ci.yml` runs the Jest suite and the Playwright e2e suite
 as two separate jobs. The Playwright job installs Chromium on the runner
 before invoking `npm run test:e2e`.
-
-comment hygiene clean
