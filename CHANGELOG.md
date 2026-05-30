@@ -39,5 +39,3 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runtime grant.
 - apiKey now stored in chrome.storage.session (in-memory, cleared on browser
   restart); agentId and the retry queue remain in chrome.storage.local.
-
-comment hygiene clean
