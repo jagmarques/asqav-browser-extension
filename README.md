@@ -45,7 +45,7 @@ falls back to `chrome.storage.local` with a note on the options page.
 Failed POSTs to `api.asqav.com` are queued in
 `chrome.storage.local.pendingReceipts` (FIFO, capped at 100 entries) and
 retried by a `chrome.alarms` tick every 5 minutes. The operator receives at
-most one `chrome.notifications` toast per error class per hour so persistent
-failures surface without spamming.
+most one `chrome.notifications` toast per error class per hour, so a persistent
+failure still surfaces without flooding them with toasts.
 
 License: MIT.
