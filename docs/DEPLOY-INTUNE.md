@@ -172,7 +172,7 @@ JSON during the next sync.
 
 To disable auto-detection without uninstalling the extension, set
 `mdmAutoEnable` to false in the managed-storage policy and let Chrome sync
-the change. The extension stops requesting permissions on startup; existing
+the change. The extension stops requesting permissions on startup. Existing
 grants persist until the operator clicks "Disable Detection" on the options
 page or until you also remove the `mdmManagedHosts` entries via the Chrome
 `ExtensionSettings` policy.

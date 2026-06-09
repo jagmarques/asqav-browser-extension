@@ -15,7 +15,7 @@ npx playwright install --with-deps chromium
 
 The second command pulls the full Chromium build (about 170 MB). The smaller
 headless shell that ships by default with Playwright does not support MV3
-extensions; full Chromium is required.
+extensions. Full Chromium is required.
 
 ## Run
 

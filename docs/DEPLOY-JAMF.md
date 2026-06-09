@@ -141,6 +141,6 @@ emitting receipts on the first AI tool navigation, with no helpdesk ticket.
 
 To disable auto-detection without uninstalling the extension, set
 `mdmAutoEnable` to false in the managed-storage plist and let JAMF push the
-change. The extension stops requesting permissions on startup; existing
+change. The extension stops requesting permissions on startup. Existing
 grants persist until the operator clicks "Disable Detection" on the options
 page or until you also remove the managed-host plist entries.
