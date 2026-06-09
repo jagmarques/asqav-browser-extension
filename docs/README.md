@@ -32,7 +32,7 @@ shadow-AI provenance alongside SDK, MCP-proxy, and network-proxy traffic.
    `chrome.storage.session` (in-memory, cleared on browser restart, not
    readable by other extensions). Re-enter after each browser restart.
 3. Paste the synthetic agent ID provisioned for this device or user group.
-   The agent id is stored in `chrome.storage.local` (persists; not secret).
+   The agent id is stored in `chrome.storage.local` (persists, not secret).
 4. Click Save.
 5. Click "Enable Detection" to grant runtime host permissions for the AI-tool
    seed list (28 domains). Revocable any time via "Disable Detection".

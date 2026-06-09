@@ -29,7 +29,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Retry queue (chrome.storage.local) with archival of overflowed entries
   (#2).
 - chrome.storage.managed policy hook for MDM auto-enable (#2).
-- 36 Jest unit tests; 2 Playwright e2e tests (#2).
+- 36 Jest unit tests, 2 Playwright e2e tests (#2).
 - MDM deployment guides for Intune and JAMF (updated for
   optional_host_permissions, #2).
 
@@ -38,4 +38,4 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - optional_host_permissions migration: 28 AI hosts moved from install-time to
   runtime grant.
 - apiKey now stored in chrome.storage.session (in-memory, cleared on browser
-  restart); agentId and the retry queue remain in chrome.storage.local.
+  restart). agentId and the retry queue remain in chrome.storage.local.
