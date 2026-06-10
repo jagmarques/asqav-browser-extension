@@ -11,3 +11,5 @@ dist/
 .company/
 test-results/
 playwright-report/
+# Local development files kept out of the published tree
+CHANGELOG.md
