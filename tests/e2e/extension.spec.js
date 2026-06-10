@@ -29,10 +29,8 @@ async function launchWithExtension() {
   const userDataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "asqav-ext-e2e-"),
   );
-  // MV3 extensions only load in full Chromium (not the headless shell), and
-  // the persistent-context mode is the documented entry point per Playwright
-  // docs. Use --headless=new so the test still runs in CI without a display
-  // but the extension subsystem stays enabled.
+  // MV3 extensions load only in full Chromium via persistent context (the Playwright
+  // entry point); --headless=new keeps the extension subsystem enabled without a display.
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: false,
@@ -108,17 +106,14 @@ test("AI host navigation triggers a sign() POST to api.asqav.com", async () => {
       await route.fulfill({ status: 200, body: '{"ok":true}' });
     });
 
-    // Drive the worker directly: invoke the exported emitReceipt rather than
-    // relying on chrome.tabs.onUpdated firing on a sandboxed data: URL (which
-    // does not always fire in headless mode).
+    // Drive the worker directly rather than relying on chrome.tabs.onUpdated, which
+    // does not always fire on a sandboxed data: URL in headless mode.
     const result = await worker.evaluate(async () => {
-      // The MV3 bundle exposes emitReceipt only when module.exports is
-      // defined. Reach it via the global scope by re-invoking the function
-      // through the registered fetch path.
+      // The MV3 bundle exposes emitReceipt only when module.exports is defined;
+      // reach it by re-invoking through the registered fetch path.
       const url = "https://chat.openai.com/c/abc";
-      // The worker re-imports the module body via importScripts is not
-      // available; instead invoke fetch directly the same way emitReceipt
-      // would, so the route handler observes a POST.
+      // importScripts is unavailable here, so invoke fetch directly the same way
+      // emitReceipt would; the route handler then observes the POST.
       const endpoint =
         "https://api.asqav.com/api/v1/agents/e2e-agent/sign";
       const res = await fetch(endpoint, {

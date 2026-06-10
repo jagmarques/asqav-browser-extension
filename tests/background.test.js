@@ -106,9 +106,8 @@ global.chrome = {
   },
 };
 
-// crypto.subtle is provided by Node 20+ via the global `crypto` namespace.
-// Force-bind it so tests run under both Node 18 (with --experimental-global-webcrypto)
-// and Node 20+.
+// Force-bind crypto.subtle so tests run under both Node 18 (needs
+// --experimental-global-webcrypto) and Node 20+ (global `crypto` built in).
 if (!global.crypto || !global.crypto.subtle) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { webcrypto } = require("crypto");
