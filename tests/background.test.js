@@ -287,7 +287,32 @@ describe("retry queue", () => {
     const pending = await bg.getPending();
     expect(pending.length).toBe(1);
     expect(pending[0].endpoint).toContain("/agents/a/sign");
-    expect(pending[0].apiKey).toBe("k");
+    // Security: the queued entry must NOT carry the live API key.
+    expect(pending[0].apiKey).toBeUndefined();
+  });
+
+  test("retry path never writes the API key to storage.local", async () => {
+    // A failed POST must queue endpoint+body only. The live signer key stays
+    // in storage.session so a local disk capture cannot recover a credential.
+    const SECRET = "test-secret-key-do-not-persist";
+    global.chrome.storage.session._store = { apiKey: SECRET };
+    global.chrome.storage.local._store = { agentId: "a" };
+    const setSpy = jest.spyOn(global.chrome.storage.local, "set");
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+    const res = await bg.emitReceipt(
+      { url: "https://chat.openai.com/", tabId: 1 },
+      { fetchImpl: fetchMock, now: () => "2026-01-01T00:00:00.000Z" },
+    );
+    expect(res.queued).toBe(true);
+    // The key must not appear in ANY storage.local.set payload.
+    expect(JSON.stringify(setSpy.mock.calls)).not.toContain(SECRET);
+    // The queued entry carries transport fields only, no credential.
+    const pending = await bg.getPending();
+    expect(pending.length).toBe(1);
+    expect(pending[0].apiKey).toBeUndefined();
+    expect(pending[0].endpoint).toContain("/agents/a/sign");
+    expect(pending[0].body).toBeDefined();
+    setSpy.mockRestore();
   });
 
   test("network throw also queues", async () => {
@@ -410,6 +435,23 @@ describe("retry queue", () => {
     const remaining = await bg.getPending();
     expect(remaining.length).toBe(1);
     expect(remaining[0].body.i).toBe(2);
+  });
+
+  test("drainPending holds the queue when the session key is absent", async () => {
+    // Post-restart storage.session is cleared, so no in-memory key exists. The
+    // queue must be held intact (not POSTed, not dropped) until it is re-entered.
+    resetStores();
+    global.chrome.storage.local._store = { agentId: "a" };
+    await bg.setPending([
+      { endpoint: "https://api.asqav.com/x", body: { i: 1 }, enqueuedAt: "t" },
+    ]);
+    const fetchMock = jest.fn();
+    const result = await bg.drainPending({ fetchImpl: fetchMock });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.held).toBe(true);
+    expect(result.remaining).toBe(1);
+    const pending = await bg.getPending();
+    expect(pending.length).toBe(1);
   });
 });
 
