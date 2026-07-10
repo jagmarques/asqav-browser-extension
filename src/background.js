@@ -14,7 +14,8 @@
  *   - API key reads from chrome.storage.session (in-memory, not readable by
  *     other extensions, cleared on browser restart).
  *   - Failed POSTs queue into chrome.storage.local.pendingReceipts (FIFO,
- *     cap 100) and retry on a chrome.alarms tick every 5 minutes.
+ *     cap 100, transport metadata only, no API key) and retry on a
+ *     chrome.alarms tick every 5 minutes.
  *   - chrome.notifications fires at most once per hour per error class so
  *     operators see persistent failures without notification spam.
  *
@@ -268,7 +269,7 @@ async function getProfileEmail() {
  * metricsArchiveOverflow counter is incremented; a notification fires so the
  * operator learns about evidence loss.
  *
- * @param {{ endpoint: string, apiKey: string, body: object, enqueuedAt: string }} entry
+ * @param {{ endpoint: string, body: object, enqueuedAt: string }} entry
  * @param {{ nowMs?: () => number }} [deps]
  */
 async function enqueuePending(entry, deps = {}) {
@@ -288,7 +289,13 @@ async function enqueuePending(entry, deps = {}) {
   let droppedCount = Number(fields[METRICS_DROPPED_KEY] || 0);
   let archiveOverflow = Number(fields[METRICS_ARCHIVE_OVERFLOW_KEY] || 0);
 
-  existing.push(entry);
+  // Persist only transport fields. The live API key stays in storage.session
+  // and is re-read at drain time, never written to disk here.
+  existing.push({
+    endpoint: entry.endpoint,
+    body: entry.body,
+    enqueuedAt: entry.enqueuedAt,
+  });
   let archiveTriggered = false;
   let archiveOverflowTriggered = false;
   while (existing.length > PENDING_QUEUE_MAX) {
@@ -528,7 +535,6 @@ async function emitReceipt(navEvent, deps = {}) {
     await enqueuePending(
       {
         endpoint,
-        apiKey: config.apiKey,
         body,
         enqueuedAt: now(),
       },
@@ -545,7 +551,6 @@ async function emitReceipt(navEvent, deps = {}) {
     await enqueuePending(
       {
         endpoint,
-        apiKey: config.apiKey,
         body,
         enqueuedAt: now(),
       },
@@ -567,18 +572,34 @@ async function emitReceipt(navEvent, deps = {}) {
  * loop runs in O(n) per tick.
  *
  * @param {{ fetchImpl?: typeof fetch, now?: () => string, nowMs?: () => number }} [deps]
- * @returns {Promise<{ attempted: number, succeeded: number, remaining: number }>}
+ * @returns {Promise<{ attempted: number, succeeded: number, remaining: number, held?: boolean }>}
  */
 async function drainPending(deps = {}) {
   const pending = await getPending();
   if (pending.length === 0) {
     return { attempted: 0, succeeded: 0, remaining: 0 };
   }
+  // Re-read the in-memory key at drain time. It is never stored with the queue.
+  // No key (storage.session cleared on restart) holds the queue until re-entered.
+  const config = await loadConfig();
+  if (!config) {
+    await maybeNotify(
+      "retry_no_key",
+      "Asqav retry queue held: API key unavailable until re-entered in options.",
+      deps,
+    );
+    return {
+      attempted: 0,
+      succeeded: 0,
+      remaining: pending.length,
+      held: true,
+    };
+  }
   const stillPending = [];
   let succeeded = 0;
   for (const entry of pending) {
     try {
-      const res = await postReceipt(entry, deps);
+      const res = await postReceipt({ ...entry, apiKey: config.apiKey }, deps);
       if (res.ok) {
         succeeded += 1;
       } else {
