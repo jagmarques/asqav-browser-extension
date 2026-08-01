@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Chromium MV3 extension that emits IETF-aligned compliance receipts for AI tool use observed in the browser.",
   "private": true,
-  "license": "MIT",
+  "license": "Elastic-2.0",
   "scripts": {
     "test": "jest --no-coverage",
     "test:e2e": "playwright test"
