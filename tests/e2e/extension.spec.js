@@ -4,8 +4,8 @@
  * Loads the unpacked extension into a persistent Chromium context (the only
  * mode Chromium supports for MV3 extension loading) and asserts:
  *
- *   1. The background service worker registers and exposes a worker URL.
- *   2. Navigating a tab to an AI host triggers an outbound POST to the Asqav
+ * The background service worker registers and exposes a worker URL.
+ * Navigating a tab to an AI host triggers an outbound POST to the Asqav
  *      signer endpoint (intercepted with route handlers so no real network
  *      traffic leaves the sandbox).
  *
