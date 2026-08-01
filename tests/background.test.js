@@ -3,17 +3,17 @@
  *
  * Drives the service-worker module in a CommonJS Jest harness with a mocked
  * chrome.* surface. Validates:
- *   1. AI-domain detection fires on chat.openai.com and skips wikipedia.org.
- *   2. emitReceipt invokes fetch with the expected SignRequest shape and
+ * AI-domain detection fires on chat.openai.com and skips wikipedia.org.
+ * emitReceipt invokes fetch with the expected SignRequest shape and
  *      headers when config is present.
- *   3. The receipt body matches the cloud SignRequest field contract
+ * The receipt body matches the cloud SignRequest field contract
  *      (action_type, compliance_mode, capture_topology, receipt_type, hash,
  *      payload_size).
- *   4. Failed receipts get queued in storage.local.pendingReceipts (FIFO,
+ * Failed receipts get queued in storage.local.pendingReceipts (FIFO,
  *      capped at PENDING_QUEUE_MAX).
- *   5. drainPending retries queued entries and drops them on 2xx.
- *   6. maybeNotify throttles per error class.
- *   7. loadConfig reads apiKey from storage.session and agentId from
+ * drainPending retries queued entries and drops them on 2xx.
+ * maybeNotify throttles per error class.
+ * loadConfig reads apiKey from storage.session and agentId from
  *      storage.local; falls back to local for apiKey when session is missing.
  */
 
