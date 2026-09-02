@@ -1,5 +1,5 @@
 /**
- * Asqav Shadow AI Capture - content script stub.
+ * Asqav Browser Capture - content script stub.
  *
  * Default capture mode is metadata-only: the service worker captures the
  * navigation event and never reads page contents. This content script is a

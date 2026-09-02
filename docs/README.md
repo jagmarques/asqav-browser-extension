@@ -1,4 +1,4 @@
-# Asqav Shadow AI Capture
+# Asqav Browser Capture
 
 A Chromium MV3 extension that emits IETF-aligned compliance receipts to the
 Asqav cloud whenever a managed user navigates to a known AI tool. Metadata-only
@@ -12,9 +12,11 @@ asking employees to install a heavy DLP agent. Each observation becomes a
 signed receipt anchored against the same Asqav signer that handles
 SDK-instrumented agents, so the audit pack is uniform across surfaces.
 
-The receipt envelope conforms to the IETF Compliance Receipts -04 draft and
-declares `capture_topology="browser_extension"` so the dashboard can render
-shadow-AI provenance alongside SDK, MCP-proxy, and network-proxy traffic.
+The receipt envelope conforms to
+[`draft-marques-asqav-compliance-receipts`](https://datatracker.ietf.org/doc/draft-marques-asqav-compliance-receipts/)
+and declares `capture_topology="browser_extension"`, so a receipt from this
+extension carries the same capture-topology provenance as SDK, MCP-proxy, and
+network-proxy traffic.
 
 ## Install (developer mode, v0)
 
@@ -22,7 +24,7 @@ shadow-AI provenance alongside SDK, MCP-proxy, and network-proxy traffic.
 2. Open `chrome://extensions` in Chrome, Edge, Brave, or Arc.
 3. Toggle Developer mode (top right).
 4. Click "Load unpacked" and choose the `asqav-browser-extension` folder.
-5. The extension loads with the name "Asqav Shadow AI Capture".
+5. The extension loads with the name "Asqav Browser Capture".
 
 ## Configure
 

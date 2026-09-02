@@ -1,5 +1,5 @@
 /**
- * Asqav Shadow AI Capture - background.js unit tests.
+ * Asqav Browser Capture - background.js unit tests.
  *
  * Drives the service-worker module in a CommonJS Jest harness with a mocked
  * chrome.* surface. Validates:

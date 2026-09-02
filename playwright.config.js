@@ -1,5 +1,5 @@
 /**
- * Playwright config for the Asqav Shadow AI Capture extension.
+ * Playwright config for the Asqav Browser Capture extension.
  *
  * The e2e suite loads the unpacked extension into a persistent Chromium
  * context and asserts the service worker registers and emits receipts. The

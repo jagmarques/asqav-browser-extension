@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Asqav Shadow AI Capture",
+  "name": "Asqav Browser Capture",
   "version": "0.1.0",
   "description": "Emit IETF-aligned compliance receipts for AI tool use observed in the browser.",
   "permissions": ["tabs", "storage", "declarativeNetRequest", "alarms", "notifications"],
