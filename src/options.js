@@ -1,5 +1,5 @@
 /**
- * Asqav Shadow AI Capture - options page controller.
+ * Asqav Browser Capture - options page controller.
  *
  * Storage split:
  *   - apiKey -> chrome.storage.session (in-memory, cleared on browser restart).

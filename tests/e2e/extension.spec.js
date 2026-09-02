@@ -1,5 +1,5 @@
 /**
- * Asqav Shadow AI Capture - Playwright e2e smoke test.
+ * Asqav Browser Capture - Playwright e2e smoke test.
  *
  * Loads the unpacked extension into a persistent Chromium context (the only
  * mode Chromium supports for MV3 extension loading) and asserts:

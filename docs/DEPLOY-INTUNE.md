@@ -1,6 +1,6 @@
-# Deploying the Asqav Shadow AI Capture extension via Microsoft Intune
+# Deploying the Asqav Browser Capture extension via Microsoft Intune
 
-Use the Chrome `ExtensionInstallForcelist` policy to push the Asqav Shadow AI
+Use the Chrome `ExtensionInstallForcelist` policy to push the Asqav Browser
 Capture extension to a managed Windows fleet through Microsoft Intune. The
 official Google guidance for force-installing Chrome extensions through MDM is
 at:
@@ -41,7 +41,7 @@ Step 6) requests access at runtime. Two consequences:
 
 1. Open `chrome://extensions` on a dev device with the unpacked extension
    loaded.
-2. Note the 32-character ID under "Asqav Shadow AI Capture".
+2. Note the 32-character ID under "Asqav Browser Capture".
 
 For the rest of this guide that ID is `AAAA...AAAA`. Replace with your real
 value.
@@ -52,7 +52,7 @@ value.
    profiles > Create profile.
 2. Platform: Windows 10 and later. Profile type: Templates > Administrative
    Templates (or Settings catalog if you prefer).
-3. Name the profile `Chrome - Asqav Shadow AI Capture force-install`.
+3. Name the profile `Chrome - Asqav Browser Capture force-install`.
 
 ## Step 3: Configure ExtensionInstallForcelist
 
@@ -162,7 +162,7 @@ JSON during the next sync.
 1. Force a sync.
 2. Open `chrome://policy` and confirm the four `mdm*` keys appear under
    "Extension policies" for your Asqav extension ID, with the right values.
-3. Open the Asqav options page (Extensions > Asqav Shadow AI Capture >
+3. Open the Asqav options page (Extensions > Asqav Browser Capture >
    Details > Extension options). The "AI tool detection" section should show
    "Detection enabled. Permissions granted." with no manual click required.
 4. Navigate to chat.openai.com. Within seconds you should see a receipt land

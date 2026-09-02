@@ -1,5 +1,5 @@
 /**
- * Asqav Shadow AI Capture - service worker.
+ * Asqav Browser Capture - service worker.
  *
  * Listens for tab navigation events, matches the destination host against the
  * Asqav AI-domain seed list, and emits an IETF-aligned compliance receipt to
@@ -450,7 +450,7 @@ async function maybeNotify(errorClass, message, deps = {}) {
       chrome.notifications.create("", {
         type: "basic",
         iconUrl: "icons/icon128.png",
-        title: "Asqav Shadow AI Capture",
+        title: "Asqav Browser Capture",
         message,
         priority: 0,
       });

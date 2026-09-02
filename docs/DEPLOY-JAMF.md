@@ -1,4 +1,4 @@
-# Deploying the Asqav Shadow AI Capture extension via JAMF Pro
+# Deploying the Asqav Browser Capture extension via JAMF Pro
 
 Use a JAMF Pro Chrome configuration profile to force-install the Asqav Shadow
 AI Capture extension on a managed macOS Chromium fleet. The canonical JAMF
@@ -55,7 +55,7 @@ ID with the real extension ID):
 ## Step 2: Upload to JAMF Pro
 
 1. JAMF Pro > Computers > Configuration Profiles > New.
-2. General tab: name `Chrome - Asqav Shadow AI Capture force-install`.
+2. General tab: name `Chrome - Asqav Browser Capture force-install`.
    Distribution Method: Install Automatically. Level: Computer Level.
 3. Application & Custom Settings > Upload.
 4. Preference Domain: `com.google.Chrome`.
@@ -131,7 +131,7 @@ emitting receipts on the first AI tool navigation, with no helpdesk ticket.
 1. Force a check-in: `sudo jamf policy`.
 2. Open `chrome://policy` and confirm the four `mdm*` keys appear under
    "Extension policies" for your Asqav extension ID, with the right values.
-3. Open the Asqav options page (Extensions > Asqav Shadow AI Capture >
+3. Open the Asqav options page (Extensions > Asqav Browser Capture >
    Details > Extension options). The "AI tool detection" section should show
    "Detection enabled. Permissions granted." with no manual click required.
 4. Navigate to chat.openai.com. Within seconds you should see a receipt land

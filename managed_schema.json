@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Asqav Shadow AI Capture - managed storage schema",
-  "description": "MDM-readable configuration keys for the Asqav Shadow AI Capture extension. Set via Chrome enterprise policy (see https://support.google.com/chrome/a/answer/9867568) to auto-enable detection and seed credentials on managed devices.",
+  "title": "Asqav Browser Capture - managed storage schema",
+  "description": "MDM-readable configuration keys for the Asqav Browser Capture extension. Set via Chrome enterprise policy (see https://support.google.com/chrome/a/answer/9867568) to auto-enable detection and seed credentials on managed devices.",
   "type": "object",
   "properties": {
     "mdmAutoEnable": {
