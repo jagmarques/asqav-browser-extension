@@ -1,18 +1,4 @@
-/**
- * Asqav Browser Capture - Playwright e2e smoke test.
- *
- * Loads the unpacked extension into a persistent Chromium context (the only
- * mode Chromium supports for MV3 extension loading) and asserts:
- *
- * The background service worker registers and exposes a worker URL.
- * Navigating a tab to an AI host triggers an outbound POST to the Asqav
- *      signer endpoint (intercepted with route handlers so no real network
- *      traffic leaves the sandbox).
- *
- * The MV3 service worker is loaded under chrome-extension://<id>/src/background.js
- * once the unpacked extension is installed. Playwright surfaces the worker via
- * context.serviceWorkers() once it cold-starts.
- */
+// Asqav Browser Capture worker registration and synthetic HTTP smoke tests
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { test, expect, chromium } = require("@playwright/test");
@@ -29,8 +15,8 @@ async function launchWithExtension() {
   const userDataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "asqav-ext-e2e-"),
   );
-  // MV3 extensions load only in full Chromium via persistent context (the Playwright
-  // entry point); --headless=new keeps the extension subsystem enabled without a display.
+  // Load the unpacked extension in a persistent Chromium context
+
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: false,
@@ -47,7 +33,7 @@ async function launchWithExtension() {
 test("extension bundle loads and service worker is reachable", async () => {
   const { context, userDataDir } = await launchWithExtension();
   try {
-    // Give the worker a moment to cold-start.
+    // Give the worker a moment to cold-start
     let workers = context.serviceWorkers();
     if (workers.length === 0) {
       await context.waitForEvent("serviceworker", { timeout: 15000 });
@@ -77,14 +63,14 @@ test("AI host navigation triggers a sign() POST to api.asqav.com", async () => {
     expect(workers.length).toBeGreaterThan(0);
     const worker = workers[0];
 
-    // Seed config inside the service worker so emitReceipt has a real key.
-    // chrome.storage.session is available to the worker context.
+    // Seed synthetic credentials in the worker storage
+
     await worker.evaluate(async () => {
       await chrome.storage.session.set({ apiKey: "e2e-test-key" });
       await chrome.storage.local.set({ agentId: "e2e-agent" });
     });
 
-    // Grant the host permission for chat.openai.com so the navigation fires.
+    // Request host permission without asserting the grant result
     await worker.evaluate(async () => {
       await new Promise((resolve) => {
         chrome.permissions.request(
@@ -94,7 +80,7 @@ test("AI host navigation triggers a sign() POST to api.asqav.com", async () => {
       });
     });
 
-    // Intercept the outbound POST so the test does not hit production.
+    // Install the sign-endpoint route fixture
     const seenRequests = [];
     await context.route("https://api.asqav.com/**", async (route) => {
       seenRequests.push({
@@ -106,14 +92,14 @@ test("AI host navigation triggers a sign() POST to api.asqav.com", async () => {
       await route.fulfill({ status: 200, body: '{"ok":true}' });
     });
 
-    // Drive the worker directly rather than relying on chrome.tabs.onUpdated, which
-    // does not always fire on a sandboxed data: URL in headless mode.
+    // Exercise a synthetic request from the worker context
+
     const result = await worker.evaluate(async () => {
-      // The MV3 bundle exposes emitReceipt only when module.exports is defined;
-      // reach it by re-invoking through the registered fetch path.
+      // This request does not exercise emitReceipt or the navigation listener
+
       const url = "https://chat.openai.com/c/abc";
-      // importScripts is unavailable here, so invoke fetch directly the same way
-      // emitReceipt would; the route handler then observes the POST.
+      // The fixture body is independent of the product receipt builder
+
       const endpoint =
         "https://api.asqav.com/api/v1/agents/e2e-agent/sign";
       const res = await fetch(endpoint, {
