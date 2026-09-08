@@ -98,4 +98,4 @@ Node 20+ `webcrypto` global.
 
 ## License
 
-MIT. See `LICENSE` at the repo root.
+[Elastic License 2.0](../LICENSE).

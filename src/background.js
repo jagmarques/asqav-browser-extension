@@ -1,43 +1,11 @@
-/**
- * Asqav Browser Capture - service worker.
- *
- * Listens for tab navigation events, matches the destination host against the
- * Asqav AI-domain seed list, and emits an IETF-aligned compliance receipt to
- * the Asqav signer cloud. Metadata-only by default; the receipt body never
- * includes the prompt content.
- *
- * Endpoint: POST https://api.asqav.com/api/v1/agents/<agent_id>/sign
- * Auth:     X-API-Key header sourced from chrome.storage.session (apiKey) and
- *           chrome.storage.local (agentId).
- *
- * Credential and transport contract:
- *   - API key reads from chrome.storage.session (in-memory, not readable by
- *     other extensions, cleared on browser restart).
- *   - Failed POSTs queue into chrome.storage.local.pendingReceipts (FIFO,
- *     cap 100, transport metadata only, no API key) and retry on a
- *     chrome.alarms tick every 5 minutes.
- *   - chrome.notifications fires at most once per hour per error class so
- *     operators see persistent failures without notification spam.
- *
- * Overflow and MDM contract:
- *   - Retry-queue overflow surfaces an archive bounded at PENDING_ARCHIVE_MAX
- *     plus an incremented metricsReceiptsDropped counter rather than a silent
- *     drop. The counter renders on the options page so SOC tooling can detect
- *     evidence loss.
- *   - chrome.storage.managed policy hook auto-enables detection, host
- *     permissions, and credentials on MDM-managed devices via the keys
- *     mdmAutoEnable, mdmApiKey, mdmApiEndpoint, mdmManagedHosts.
- *
- * Cloud dependency: the cloud's SignRequest receipt_type Literal must include
- * "protectmcp:observation" for posts from this extension to be accepted.
- */
+// Asqav Browser Capture service worker: navigation receipts and retries
 
 const ASQAV_ENDPOINT_BASE = "https://api.asqav.com/api/v1/agents";
 const RECEIPT_TYPE = "protectmcp:observation";
 const ACTION_TYPE = "llm:egress";
 const CAPTURE_TOPOLOGY = "browser_extension";
 
-// Retry queue knobs.
+// Retry queue knobs
 const PENDING_QUEUE_KEY = "pendingReceipts";
 const PENDING_QUEUE_MAX = 100;
 const PENDING_ARCHIVE_KEY = "pendingReceiptsArchive";
@@ -47,12 +15,12 @@ const METRICS_ARCHIVE_OVERFLOW_KEY = "metricsArchiveOverflow";
 const RETRY_ALARM_NAME = "asqav-retry-pending";
 const RETRY_ALARM_MINUTES = 5;
 
-// Notification throttle. Stored last-fired-at-ms per error class in
-// chrome.storage.local under the "errorNotifiedAt" object.
+// Notification timestamps are stored per error class in storage.local
+
 const NOTIFY_THROTTLE_MS = 60 * 60 * 1000;
 const NOTIFY_KEY = "errorNotifiedAt";
 
-// MDM policy keys read from chrome.storage.managed.
+// MDM policy keys read from chrome.storage.managed
 const MDM_KEYS = [
   "mdmAutoEnable",
   "mdmApiKey",
@@ -60,12 +28,12 @@ const MDM_KEYS = [
   "mdmManagedHosts",
 ];
 
-// Override of the default endpoint base, set by the MDM hook when
-// mdmApiEndpoint is present. Read by emitReceipt and drainPending.
+// Managed endpoint base for new receipt requests
+
 let runtimeEndpointBase = ASQAV_ENDPOINT_BASE;
 
-// Inlined seed list (the JSON file is bundled but the service worker must not
-// rely on fetch() against extension-local URLs in MV3 cold-start paths).
+// Keep the host seed available during service-worker cold starts
+
 const AI_DOMAIN_SEED = [
   "chat.openai.com",
   "chatgpt.com",
@@ -96,17 +64,13 @@ const AI_DOMAIN_SEED = [
   "grok.x.ai",
 ];
 
-// Path-scoped matches: only fire when the URL path begins with one of the
-// listed prefixes (e.g., github.com/copilot but not github.com generally).
+// Match only the listed URL prefixes on hosts with scoped AI tools
+
 const AI_DOMAIN_PATH_SCOPED = {
   "github.com": ["/copilot"],
 };
 
-/**
- * Determine whether a URL points at a known AI tool.
- * @param {string} urlString
- * @returns {boolean}
- */
+// Match known AI hosts and their scoped paths
 function isAiDomain(urlString) {
   let url;
   try {
@@ -126,18 +90,7 @@ function isAiDomain(urlString) {
   return false;
 }
 
-/**
- * JCS (JSON Canonicalization Scheme, RFC 8785) - minimal implementation
- * sufficient for the context bag shape this extension emits. Keys are sorted
- * lexicographically; strings are JSON-escaped per RFC 8259; numbers follow the
- * RFC 8785 number serialization rules for the subset we use (integers only).
- *
- * The cloud verifier re-canonicalises and recomputes the hash, so this side
- * only needs to be deterministic across browser sessions.
- *
- * @param {unknown} value
- * @returns {string}
- */
+// Canonicalize the context fields before hashing
 function jcsStringify(value) {
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -161,13 +114,7 @@ function jcsStringify(value) {
   throw new Error("jcs: unsupported type " + typeof value);
 }
 
-/**
- * Compute SHA-256 of a UTF-8 string and return a "sha256:<hex>" tag.
- * Uses the WebCrypto API available in MV3 service workers.
- *
- * @param {string} text
- * @returns {Promise<string>}
- */
+// Hash UTF-8 text with WebCrypto and return a sha256-prefixed hex digest
 async function sha256Tag(text) {
   const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -177,12 +124,7 @@ async function sha256Tag(text) {
   return "sha256:" + hex;
 }
 
-/**
- * Build the receipt payload that gets POSTed to the Asqav signer.
- *
- * @param {{ domain: string, tabSessionId: string, observedAt: string, userId: string }} ctx
- * @returns {Promise<object>}
- */
+// Hash the context and return the receipt request body
 async function buildReceiptBody(ctx) {
   const contextBag = {
     domain: ctx.domain,
@@ -203,14 +145,7 @@ async function buildReceiptBody(ctx) {
   };
 }
 
-/**
- * Fetch config. apiKey is sourced from chrome.storage.session (in-memory) and
- * agentId from chrome.storage.local (persisted). Returns null when either
- * field is missing so callers can short-circuit before opening a network
- * connection.
- *
- * @returns {Promise<{apiKey: string, agentId: string} | null>}
- */
+// Read the key and agent ID; return null when either is absent
 async function loadConfig() {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) {
     return null;
@@ -221,8 +156,8 @@ async function loadConfig() {
     const sessionPart = await chrome.storage.session.get(["apiKey"]);
     apiKey = sessionPart.apiKey;
   }
-  // Fallback for environments without storage.session: read from local. The
-  // options page documents the downgrade.
+  // Fall back to the local key when the session key is unavailable
+
   if (!apiKey) {
     const localPart = await chrome.storage.local.get(["apiKey"]);
     apiKey = localPart.apiKey;
@@ -231,12 +166,7 @@ async function loadConfig() {
   return { apiKey, agentId };
 }
 
-/**
- * Best-effort browser profile email lookup. Returns "" when unavailable; the
- * cloud falls back to the install-token-derived user identity in that case.
- *
- * @returns {Promise<string>}
- */
+// Return the browser profile email, or an empty string when unavailable
 async function getProfileEmail() {
   try {
     if (
@@ -260,18 +190,7 @@ async function getProfileEmail() {
   return "";
 }
 
-/**
- * Append a failed receipt to the pending queue. When the queue exceeds
- * PENDING_QUEUE_MAX the oldest entry is MOVED to the archive (not dropped)
- * and the metricsReceiptsDropped counter is incremented so a SOC monitoring
- * the extension can detect that receipts overflowed the live queue. If the
- * archive itself overflows, the very oldest archive entry is removed and the
- * metricsArchiveOverflow counter is incremented; a notification fires so the
- * operator learns about evidence loss.
- *
- * @param {{ endpoint: string, body: object, enqueuedAt: string }} entry
- * @param {{ nowMs?: () => number }} [deps]
- */
+// Append a failed receipt and account for queue and archive overflow
 async function enqueuePending(entry, deps = {}) {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
   const fields = await chrome.storage.local.get([
@@ -289,8 +208,8 @@ async function enqueuePending(entry, deps = {}) {
   let droppedCount = Number(fields[METRICS_DROPPED_KEY] || 0);
   let archiveOverflow = Number(fields[METRICS_ARCHIVE_OVERFLOW_KEY] || 0);
 
-  // Persist only transport fields. The live API key stays in storage.session
-  // and is re-read at drain time, never written to disk here.
+  // Queue transport fields without the API key; retries read the key again
+
   existing.push({
     endpoint: entry.endpoint,
     body: entry.body,
@@ -318,7 +237,7 @@ async function enqueuePending(entry, deps = {}) {
   });
 
   if (archiveTriggered) {
-    // Structured event for SOC log scrapers tailing the service-worker console.
+    // Structured event for SOC log scrapers tailing the service-worker console
     try {
       // eslint-disable-next-line no-console
       console.error(
@@ -360,21 +279,13 @@ async function enqueuePending(entry, deps = {}) {
   }
 }
 
-/**
- * Atomically replace the pending queue.
- *
- * @param {Array} entries
- */
+// Replace the stored pending queue
 async function setPending(entries) {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
   await chrome.storage.local.set({ [PENDING_QUEUE_KEY]: entries });
 }
 
-/**
- * Read the pending queue (always returns an array).
- *
- * @returns {Promise<Array>}
- */
+// Return the pending queue, or an empty array
 async function getPending() {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return [];
   const { [PENDING_QUEUE_KEY]: existing = [] } = await chrome.storage.local.get(
@@ -383,13 +294,7 @@ async function getPending() {
   return Array.isArray(existing) ? existing : [];
 }
 
-/**
- * Read the archive queue (always returns an array). The archive holds entries
- * that overflowed the live retry queue so SOC tooling can inspect lost
- * evidence and the options page can surface counts.
- *
- * @returns {Promise<Array>}
- */
+// Return archived overflow entries, or an empty array
 async function getArchive() {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return [];
   const { [PENDING_ARCHIVE_KEY]: existing = [] } =
@@ -397,11 +302,7 @@ async function getArchive() {
   return Array.isArray(existing) ? existing : [];
 }
 
-/**
- * Read the dropped-receipt metrics counters.
- *
- * @returns {Promise<{ dropped: number, archiveOverflow: number, archiveSize: number, queueSize: number }>}
- */
+// Read drop counters and queue sizes for the options page
 async function getDropMetrics() {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) {
     return { dropped: 0, archiveOverflow: 0, archiveSize: 0, queueSize: 0 };
@@ -424,15 +325,7 @@ async function getDropMetrics() {
   };
 }
 
-/**
- * Fire a chrome.notifications notification, throttled to at most once per
- * NOTIFY_THROTTLE_MS per error class so persistent failures do not spam the
- * operator. Errors here are swallowed; user feedback is best-effort.
- *
- * @param {string} errorClass
- * @param {string} message
- * @param {{ nowMs?: () => number }} [deps]
- */
+// Throttle best-effort notifications by error class
 async function maybeNotify(errorClass, message, deps = {}) {
   if (!globalThis.chrome || !chrome.storage || !chrome.storage.local) return;
   const nowMs = deps.nowMs || (() => Date.now());
@@ -441,7 +334,7 @@ async function maybeNotify(errorClass, message, deps = {}) {
   ]);
   const lastAt = (book && book[errorClass]) || 0;
   const now = nowMs();
-  // lastAt === 0 means we have never fired for this class; allow through.
+  // lastAt === 0 means we have never fired for this class; allow through
   if (lastAt !== 0 && now - lastAt < NOTIFY_THROTTLE_MS) return;
   const nextBook = Object.assign({}, book, { [errorClass]: now });
   await chrome.storage.local.set({ [NOTIFY_KEY]: nextBook });
@@ -460,14 +353,7 @@ async function maybeNotify(errorClass, message, deps = {}) {
   }
 }
 
-/**
- * Categorise a fetch failure into a short error class so notifications are
- * throttled per category rather than per request.
- *
- * @param {unknown} err
- * @param {number | undefined} status
- * @returns {string}
- */
+// Classify HTTP and transport failures for notification throttling
 function classifyError(err, status) {
   if (status && status >= 500) return "server_5xx";
   if (status && status >= 400) return "client_4xx";
@@ -477,13 +363,7 @@ function classifyError(err, status) {
   return "network";
 }
 
-/**
- * Attempt to POST a receipt. Returns { ok, status } on success or any
- * non-network error response, throws on transport failure.
- *
- * @param {{ endpoint: string, apiKey: string, body: object }} req
- * @param {{ fetchImpl?: typeof fetch }} [deps]
- */
+// POST a receipt; return HTTP status or throw on transport failure
 async function postReceipt(req, deps = {}) {
   const fetchImpl = deps.fetchImpl || globalThis.fetch;
   const res = await fetchImpl(req.endpoint, {
@@ -497,14 +377,7 @@ async function postReceipt(req, deps = {}) {
   return { ok: Boolean(res.ok), status: res.status };
 }
 
-/**
- * Emit a receipt for one observed AI-tool navigation. Network failure or any
- * non-2xx response queues the receipt for the retry alarm to drain.
- *
- * @param {{ url: string, tabId: number }} navEvent
- * @param {{ fetchImpl?: typeof fetch, now?: () => string, nowMs?: () => number }} [deps]
- * @returns {Promise<{ ok: boolean, status?: number, skipped?: string, queued?: boolean }>}
- */
+// Sign an AI navigation receipt; queue and notify on failure
 async function emitReceipt(navEvent, deps = {}) {
   if (!isAiDomain(navEvent.url)) {
     return { ok: false, skipped: "not_ai_domain" };
@@ -531,7 +404,7 @@ async function emitReceipt(navEvent, deps = {}) {
     if (res.ok) {
       return { ok: true, status: res.status };
     }
-    // Non-2xx: queue and notify (throttled).
+    // Non-2xx: queue and notify (throttled)
     await enqueuePending(
       {
         endpoint,
@@ -566,21 +439,14 @@ async function emitReceipt(navEvent, deps = {}) {
   }
 }
 
-/**
- * Drain the pending queue. Each entry is retried once per call; entries that
- * still fail go to the back of the queue. Bounded by PENDING_QUEUE_MAX so the
- * loop runs in O(n) per tick.
- *
- * @param {{ fetchImpl?: typeof fetch, now?: () => string, nowMs?: () => number }} [deps]
- * @returns {Promise<{ attempted: number, succeeded: number, remaining: number, held?: boolean }>}
- */
+// Retry the pending snapshot and retain entries that still fail
 async function drainPending(deps = {}) {
   const pending = await getPending();
   if (pending.length === 0) {
     return { attempted: 0, succeeded: 0, remaining: 0 };
   }
-  // Re-read the in-memory key at drain time. It is never stored with the queue.
-  // No key (storage.session cleared on restart) holds the queue until re-entered.
+  // Read the key again; queue entries never contain credentials
+  // Hold the queue when configuration is incomplete
   const config = await loadConfig();
   if (!config) {
     await maybeNotify(
@@ -626,20 +492,7 @@ async function drainPending(deps = {}) {
   };
 }
 
-/**
- * Read chrome.storage.managed and, when mdmAutoEnable is true, auto-grant
- * optional host permissions for the managed host patterns, auto-enable
- * detection, and seed apiKey + agentId + endpoint overrides from the MDM
- * policy. Chrome auto-grants permission requests that originate from MDM
- * policy without prompting the user.
- *
- * Safe to call from chrome.runtime.onInstalled and chrome.runtime.onStartup.
- * No-ops gracefully when chrome.storage.managed is unavailable (e.g., in
- * unmanaged Chromium or in the Jest harness without an explicit mock).
- *
- * @param {{ permissionsRequestImpl?: Function }} [deps]
- * @returns {Promise<{ ran: boolean, granted?: boolean, hostsRequested?: number, endpointOverridden?: boolean }>}
- */
+// Apply managed key and endpoint settings, then request host permissions
 async function applyManagedPolicy(deps = {}) {
   if (
     !globalThis.chrome ||
@@ -659,8 +512,8 @@ async function applyManagedPolicy(deps = {}) {
     return { ran: false };
   }
 
-  // Seed credentials and endpoint overrides first so that any receipts
-  // emitted before the permission grant resolves still use the right values.
+  // Store the managed key and endpoint before requesting permissions
+
   if (chrome.storage.session && chrome.storage.session.set && policy.mdmApiKey) {
     try {
       await chrome.storage.session.set({ apiKey: String(policy.mdmApiKey) });
@@ -684,8 +537,8 @@ async function applyManagedPolicy(deps = {}) {
     // best-effort
   }
 
-  // Request the optional host permissions. MDM-policy-granted requests are
-  // resolved without a user prompt by Chrome.
+  // Request host access; managed settings do not establish a grant
+
   const hosts = Array.isArray(policy.mdmManagedHosts)
     ? policy.mdmManagedHosts
     : AI_DOMAIN_SEED.map((h) => "https://" + h + "/*");
@@ -716,10 +569,7 @@ async function applyManagedPolicy(deps = {}) {
   };
 }
 
-/**
- * Register chrome.runtime.onInstalled and chrome.runtime.onStartup so the
- * MDM policy is applied whenever the extension boots.
- */
+// Apply managed settings on install and browser startup
 function registerManagedPolicyHooks() {
   if (!globalThis.chrome || !chrome.runtime) return;
   if (chrome.runtime.onInstalled && chrome.runtime.onInstalled.addListener) {
@@ -734,15 +584,12 @@ function registerManagedPolicyHooks() {
   }
 }
 
-/**
- * Wire the chrome.tabs.onUpdated listener. Called once at service-worker
- * cold start.
- */
+// Register the completed-navigation listener at worker startup
 function registerTabListener() {
   if (!globalThis.chrome || !chrome.tabs || !chrome.tabs.onUpdated) return;
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
     if (changeInfo.status !== "complete" || !changeInfo.url) {
-      // Capture once per navigation: require both a URL change and "complete" status.
+      // Use the changed URL or the completed tab URL
       if (!(changeInfo.status === "complete" && _tab && _tab.url)) {
         return;
       }
@@ -753,10 +600,7 @@ function registerTabListener() {
   });
 }
 
-/**
- * Register the chrome.alarms tick that drains the retry queue every
- * RETRY_ALARM_MINUTES minutes. Also creates the alarm if it does not exist.
- */
+// Register and create the periodic retry alarm
 function registerRetryAlarm() {
   if (!globalThis.chrome || !chrome.alarms) return;
   try {
@@ -764,8 +608,8 @@ function registerRetryAlarm() {
       periodInMinutes: RETRY_ALARM_MINUTES,
     });
   } catch (_err) {
-    // alarms.create can throw in odd environments; the listener is the
-    // important half.
+    // Retain the listener if alarm creation fails
+
   }
   if (chrome.alarms.onAlarm && chrome.alarms.onAlarm.addListener) {
     chrome.alarms.onAlarm.addListener((alarm) => {
@@ -776,15 +620,15 @@ function registerRetryAlarm() {
   }
 }
 
-// Register on cold start. In Jest the chrome global is mocked, so these are
-// safe calls even outside the browser.
+// Register listeners when the worker module loads
+
 registerTabListener();
 registerRetryAlarm();
 registerManagedPolicyHooks();
-// Best-effort apply on cold start so a managed device captures on first nav, not next onStartup.
+// Attempt managed setup when the worker module loads
 void applyManagedPolicy();
 
-// Test-only export: the MV3 worker ignores module.exports but Jest (CommonJS) picks it up.
+// Expose test helpers only when CommonJS is available
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     isAiDomain,

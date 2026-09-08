@@ -1,18 +1,4 @@
-/**
- * Asqav Browser Capture - options page controller.
- *
- * Storage split:
- *   - apiKey -> chrome.storage.session (in-memory, cleared on browser restart).
- *     Not readable by other extensions; reduces blast radius of any rogue
- *     extension with the "storage" permission.
- *   - agentId -> chrome.storage.local (persists across restarts). Not secret.
- *
- * Host permissions for the AI-domain seed list are declared as
- * optional_host_permissions in manifest.json and requested at runtime via
- * chrome.permissions.request when the operator clicks "Enable Detection".
- * Keeps the install-time broad-host warning out of the Chrome Web Store
- * listing.
- */
+// Asqav Browser Capture options: credentials, permissions and queue metrics
 
 const AI_HOST_PATTERNS = [
   "https://chat.openai.com/*",
@@ -45,10 +31,7 @@ const AI_HOST_PATTERNS = [
   "https://grok.x.ai/*",
 ];
 
-/**
- * Wrap chrome.permissions.contains in a promise. Returns false when the
- * permissions API is unavailable so the options page degrades gracefully.
- */
+// Check permissions; return false if the API is unavailable
 function permissionsContains(perms) {
   return new Promise((resolve) => {
     if (!chrome.permissions || !chrome.permissions.contains) {
@@ -63,9 +46,7 @@ function permissionsContains(perms) {
   });
 }
 
-/**
- * Wrap chrome.permissions.request in a promise.
- */
+// Request permissions through the Chrome callback API
 function permissionsRequest(perms) {
   return new Promise((resolve) => {
     if (!chrome.permissions || !chrome.permissions.request) {
@@ -80,9 +61,7 @@ function permissionsRequest(perms) {
   });
 }
 
-/**
- * Wrap chrome.permissions.remove in a promise.
- */
+// Remove permissions through the Chrome callback API
 function permissionsRemove(perms) {
   return new Promise((resolve) => {
     if (!chrome.permissions || !chrome.permissions.remove) {
@@ -97,11 +76,7 @@ function permissionsRemove(perms) {
   });
 }
 
-/**
- * Refresh the reliability metric counters shown on the options page.
- * Reads chrome.storage.local directly so this stays decoupled from the
- * background service worker. Best-effort; missing keys read as 0.
- */
+// Read reliability counters from local storage for display
 async function refreshMetrics() {
   if (!chrome.storage || !chrome.storage.local) return;
   try {
@@ -132,9 +107,7 @@ async function refreshMetrics() {
   }
 }
 
-/**
- * Refresh the on-page permission state label.
- */
+// Refresh the permission status label
 async function refreshPermStatus(el) {
   const granted = await permissionsContains({ origins: AI_HOST_PATTERNS });
   if (granted) {
@@ -155,7 +128,7 @@ async function refreshPermStatus(el) {
   const disableBtn = document.getElementById("disable-detection");
   const permStatusEl = document.getElementById("perm-status");
 
-  // Read agentId from .local (persists) and apiKey from .session (in-memory).
+  // Load the persistent agent ID and session key
   const localExisting = await chrome.storage.local.get(["agentId"]);
   if (localExisting.agentId) agentIdInput.value = localExisting.agentId;
 
@@ -176,13 +149,13 @@ async function refreshPermStatus(el) {
       statusEl.style.color = "#a40000";
       return;
     }
-    // agentId persists; apiKey lives only in session memory.
+    // Persist the agent ID and prefer session storage for the key
     await chrome.storage.local.set({ agentId });
     if (chrome.storage.session && chrome.storage.session.set) {
       await chrome.storage.session.set({ apiKey });
     } else {
-      // Fallback for older browsers without storage.session: write to local
-      // and surface a downgrade notice. The cloud documents this trade-off.
+      // Store the key locally if session storage is absent
+
       await chrome.storage.local.set({ apiKey });
     }
     statusEl.textContent = "Saved.";
@@ -214,7 +187,7 @@ async function refreshPermStatus(el) {
   });
 })();
 
-// Test-only export (CommonJS). Browsers ignore module.exports.
+// Expose test helpers only when CommonJS is available
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { AI_HOST_PATTERNS };
 }

@@ -48,4 +48,4 @@ and retried by a `chrome.alarms` tick every 5 minutes. The operator receives at
 most one `chrome.notifications` toast per error class per hour, so a persistent
 failure still surfaces without flooding them with toasts.
 
-License: MIT.
+License: [Elastic License 2.0](LICENSE).

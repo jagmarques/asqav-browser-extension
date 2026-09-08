@@ -1,23 +1,6 @@
-/**
- * Asqav Browser Capture - background.js unit tests.
- *
- * Drives the service-worker module in a CommonJS Jest harness with a mocked
- * chrome.* surface. Validates:
- * AI-domain detection fires on chat.openai.com and skips wikipedia.org.
- * emitReceipt invokes fetch with the expected SignRequest shape and
- *      headers when config is present.
- * The receipt body matches the cloud SignRequest field contract
- *      (action_type, compliance_mode, capture_topology, receipt_type, hash,
- *      payload_size).
- * Failed receipts get queued in storage.local.pendingReceipts (FIFO,
- *      capped at PENDING_QUEUE_MAX).
- * drainPending retries queued entries and drops them on 2xx.
- * maybeNotify throttles per error class.
- * loadConfig reads apiKey from storage.session and agentId from
- *      storage.local; falls back to local for apiKey when session is missing.
- */
+// Asqav Browser Capture unit tests with Chrome API fixtures
 
-// --- chrome global mock (installed before require) ---------------------------
+// Install Chrome fixtures before loading the worker module
 
 const tabListeners = [];
 const alarmListeners = [];
@@ -106,8 +89,8 @@ global.chrome = {
   },
 };
 
-// Force-bind crypto.subtle so tests run under both Node 18 (needs
-// --experimental-global-webcrypto) and Node 20+ (global `crypto` built in).
+// Use Node WebCrypto explicitly in the Jest environment
+
 if (!global.crypto || !global.crypto.subtle) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { webcrypto } = require("crypto");
@@ -124,7 +107,7 @@ function resetStores() {
   permissionsRequests.length = 0;
 }
 
-// --- 1. AI-domain detection --------------------------------------------------
+// AI domain matching
 
 describe("isAiDomain", () => {
   test("matches chat.openai.com", () => {
@@ -153,7 +136,7 @@ describe("isAiDomain", () => {
   });
 });
 
-// --- 2. Receipt body shape ---------------------------------------------------
+// Receipt request shape
 
 describe("buildReceiptBody", () => {
   test("matches the cloud SignRequest field contract", async () => {
@@ -163,7 +146,7 @@ describe("buildReceiptBody", () => {
       observedAt: "2026-05-24T12:00:00.000Z",
       userId: "alice@example.com",
     });
-    // Required fields per cloud SignRequest + IETF -04 envelope.
+    // Required receipt fields
     expect(body).toHaveProperty("action_type", "llm:egress");
     expect(body).toHaveProperty("compliance_mode", true);
     expect(body).toHaveProperty("capture_topology", "browser_extension");
@@ -189,7 +172,7 @@ describe("buildReceiptBody", () => {
   });
 });
 
-// --- 3. emitReceipt routing + skip semantics ---------------------------------
+// Receipt routing and skip results
 
 describe("emitReceipt", () => {
   beforeEach(() => {
@@ -248,7 +231,7 @@ describe("emitReceipt", () => {
   });
 });
 
-// --- 4. tab listener wires through to emitReceipt ----------------------------
+// Navigation listener registration
 
 describe("registerTabListener", () => {
   test("a registered listener exists from cold-start side effect", () => {
@@ -256,7 +239,7 @@ describe("registerTabListener", () => {
   });
 });
 
-// --- 5. retry alarm + queue --------------------------------------------------
+// Retry alarm and queue
 
 describe("retry queue", () => {
   beforeEach(() => {
@@ -287,13 +270,13 @@ describe("retry queue", () => {
     const pending = await bg.getPending();
     expect(pending.length).toBe(1);
     expect(pending[0].endpoint).toContain("/agents/a/sign");
-    // Security: the queued entry must NOT carry the live API key.
+    // Security: the queued entry must NOT carry the live API key
     expect(pending[0].apiKey).toBeUndefined();
   });
 
   test("retry path never writes the API key to storage.local", async () => {
-    // A failed POST must queue endpoint+body only. The live signer key stays
-    // in storage.session so a local disk capture cannot recover a credential.
+    // A failed request queues its transport data without the key
+
     const SECRET = "test-secret-key-do-not-persist";
     global.chrome.storage.session._store = { apiKey: SECRET };
     global.chrome.storage.local._store = { agentId: "a" };
@@ -304,9 +287,9 @@ describe("retry queue", () => {
       { fetchImpl: fetchMock, now: () => "2026-01-01T00:00:00.000Z" },
     );
     expect(res.queued).toBe(true);
-    // The key must not appear in ANY storage.local.set payload.
+    // The key must not appear in ANY storage.local.set payload
     expect(JSON.stringify(setSpy.mock.calls)).not.toContain(SECRET);
-    // The queued entry carries transport fields only, no credential.
+    // The queued entry carries transport fields only, no credential
     const pending = await bg.getPending();
     expect(pending.length).toBe(1);
     expect(pending[0].apiKey).toBeUndefined();
@@ -328,9 +311,9 @@ describe("retry queue", () => {
   });
 
   test("queue is FIFO-capped at PENDING_QUEUE_MAX and evicts to archive", async () => {
-    // Silence the SOC-observability structured log during this assertion.
+    // Silence the SOC-observability structured log during this assertion
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
-    // Pre-seed past the cap with synthetic entries.
+    // Pre-seed past the cap with synthetic entries
     const seed = [];
     for (let i = 0; i < bg.PENDING_QUEUE_MAX; i += 1) {
       seed.push({ endpoint: "x", apiKey: "k", body: { i }, enqueuedAt: "t" });
@@ -344,10 +327,10 @@ describe("retry queue", () => {
     });
     const pending = await bg.getPending();
     expect(pending.length).toBe(bg.PENDING_QUEUE_MAX);
-    // Oldest moved to archive, newest at tail.
+    // Oldest moved to archive, newest at tail
     expect(pending[0].body.i).toBe(1);
     expect(pending[pending.length - 1].body.i).toBe("new");
-    // The evicted entry must not be silently lost.
+    // The evicted entry must not be silently lost
     const archive = await bg.getArchive();
     expect(archive.length).toBe(1);
     expect(archive[0].body.i).toBe(0);
@@ -359,7 +342,7 @@ describe("retry queue", () => {
 
   test("archive overflow increments archiveOverflow counter and notifies", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
-    // Fill queue to cap, then archive to cap, then enqueue once more.
+    // Fill queue to cap, then archive to cap, then enqueue once more
     const queueSeed = [];
     for (let i = 0; i < bg.PENDING_QUEUE_MAX; i += 1) {
       queueSeed.push({
@@ -392,7 +375,7 @@ describe("retry queue", () => {
     expect(metrics.dropped).toBe(1);
     expect(metrics.archiveOverflow).toBe(1);
     expect(metrics.archiveSize).toBe(bg.PENDING_ARCHIVE_MAX);
-    // A queue_overflow OR archive_overflow notification fired.
+    // A queue_overflow OR archive_overflow notification fired
     expect(createdNotifications.length).toBeGreaterThan(0);
     errSpy.mockRestore();
   });
@@ -438,8 +421,8 @@ describe("retry queue", () => {
   });
 
   test("drainPending holds the queue when the session key is absent", async () => {
-    // Post-restart storage.session is cleared, so no in-memory key exists. The
-    // queue must be held intact (not POSTed, not dropped) until it is re-entered.
+    // Hold the queue while session credentials are absent
+
     resetStores();
     global.chrome.storage.local._store = { agentId: "a" };
     await bg.setPending([
@@ -455,7 +438,7 @@ describe("retry queue", () => {
   });
 });
 
-// --- 6. notification throttle ------------------------------------------------
+// Notification throttling
 
 describe("maybeNotify", () => {
   beforeEach(() => {
@@ -483,7 +466,7 @@ describe("maybeNotify", () => {
   });
 });
 
-// --- 7. loadConfig session vs local routing ----------------------------------
+// Session and local configuration
 
 describe("loadConfig", () => {
   beforeEach(() => {
@@ -519,7 +502,7 @@ describe("loadConfig", () => {
   });
 });
 
-// --- 8. classifyError --------------------------------------------------------
+// Error classification
 
 describe("classifyError", () => {
   test("5xx status -> server_5xx", () => {
@@ -539,7 +522,7 @@ describe("classifyError", () => {
   });
 });
 
-// --- 9. MDM managed-policy hook ---------------------------------------------
+// Managed settings with Chrome API fixtures
 
 describe("applyManagedPolicy", () => {
   beforeEach(() => {
@@ -570,15 +553,15 @@ describe("applyManagedPolicy", () => {
     expect(result.granted).toBe(true);
     expect(result.endpointOverridden).toBe(true);
     expect(result.hostsRequested).toBe(2);
-    // Credentials seeded into session storage.
+    // Credentials seeded into session storage
     expect(global.chrome.storage.session._store.apiKey).toBe("mdm-key-123");
-    // Endpoint persisted to local for the options page to display.
+    // Persist the managed endpoint
     expect(global.chrome.storage.local._store.apiEndpoint).toBe(
       "https://signer.private.example.com/api/v1/agents",
     );
-    // detectionEnabled flag toggled.
+    // detectionEnabled flag toggled
     expect(global.chrome.storage.local._store.detectionEnabled).toBe(true);
-    // Permissions request fired for the managed hosts.
+    // The fixture records a request for the managed hosts
     expect(permissionsRequests.length).toBe(1);
     expect(permissionsRequests[0].origins).toEqual([
       "https://chat.openai.com/*",
