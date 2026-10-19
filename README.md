@@ -15,7 +15,7 @@ Deployment guides:
 
 Install-time permissions, required for the extension to load:
 
-- `tabs`, `storage`, `declarativeNetRequest`, `alarms`, `notifications`
+- `tabs`, `storage`, `alarms`, `notifications`
 - `host_permissions`: only the signer endpoint `https://api.asqav.com/*`
 
 Runtime permissions, granted by the operator from the options page:
