@@ -1,17 +1,27 @@
 const esbuild = require("esbuild");
 
-// Bundle each MV3 entry to dist/ minified, no maps
+// Bundle each MV3 entry minified, no maps
 // Raw src stays in git; only dist ships in the store zip
-const entries = ["background.js", "options.js"];
-for (const name of entries) {
-  esbuild.buildSync({
-    entryPoints: [`src/${name}`],
-    bundle: true,
-    minify: true,
-    legalComments: "none",
-    sourcemap: false,
-    target: "chrome120",
-    outfile: `dist/${name}`,
-  });
+const ENTRIES = ["background.js", "options.js"];
+
+function build(outdir = "dist") {
+  for (const name of ENTRIES) {
+    esbuild.buildSync({
+      entryPoints: [`src/${name}`],
+      bundle: true,
+      minify: true,
+      legalComments: "none",
+      sourcemap: false,
+      target: "chrome120",
+      outfile: `${outdir}/${name}`,
+    });
+  }
+  return ENTRIES;
 }
-console.log(`built: ${entries.join(", ")}`);
+
+if (require.main === module) {
+  const built = build(process.env.OUTDIR || "dist");
+  console.log(`built: ${built.join(", ")}`);
+}
+
+module.exports = { build };

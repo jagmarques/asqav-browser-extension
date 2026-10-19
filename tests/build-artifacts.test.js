@@ -1,4 +1,4 @@
-const { execFileSync } = require("node:child_process");
+const { build } = require("../scripts/build");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -28,14 +28,8 @@ function freshDir(tag) {
 }
 
 test("dist bundles are minified, map-free and leak-free", () => {
-  execFileSync("node", [path.join(ROOT, "scripts", "build.js")], {
-    cwd: ROOT,
-    stdio: "pipe",
-  });
   const dir = freshDir("dist");
-  for (const f of fs.readdirSync(path.join(ROOT, "dist"))) {
-    fs.copyFileSync(path.join(ROOT, "dist", f), path.join(dir, f));
-  }
+  expect(build(dir)).toEqual(["background.js", "options.js"]);
   checkClean("dist", dir);
   const raw = fs.readFileSync(path.join(ROOT, "src", "background.js"), "utf8");
   const built = readBundle(dir, "background.js");
