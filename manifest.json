@@ -3,7 +3,7 @@
   "name": "Asqav Browser Capture",
   "version": "0.1.0",
   "description": "Emit IETF-aligned compliance receipts for AI tool use observed in the browser.",
-  "permissions": ["tabs", "storage", "declarativeNetRequest", "alarms", "notifications"],
+  "permissions": ["tabs", "storage", "alarms", "notifications"],
   "optional_host_permissions": [
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
@@ -35,7 +35,7 @@
     "https://grok.x.ai/*"
   ],
   "host_permissions": ["https://api.asqav.com/*"],
-  "background": { "service_worker": "src/background.js" },
+  "background": { "service_worker": "dist/background.js" },
   "options_page": "src/options.html",
   "storage": { "managed_schema": "managed_schema.json" },
   "icons": {

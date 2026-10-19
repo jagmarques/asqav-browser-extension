@@ -41,7 +41,7 @@ test("extension bundle loads and service worker is reachable", async () => {
     }
     expect(workers.length).toBeGreaterThan(0);
     const url = workers[0].url();
-    expect(url).toMatch(/^chrome-extension:\/\/[a-z]{32}\/src\/background\.js$/);
+    expect(url).toMatch(/^chrome-extension:\/\/[a-z]{32}\/dist\/background\.js$/);
   } finally {
     await context.close();
     try {
