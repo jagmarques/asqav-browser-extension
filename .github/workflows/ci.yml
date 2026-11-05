@@ -6,7 +6,7 @@ on:
     branches: [main]
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hz-ci-light]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +18,7 @@ jobs:
       - run: npm run build
       - run: npm test
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hz-ci-light]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
